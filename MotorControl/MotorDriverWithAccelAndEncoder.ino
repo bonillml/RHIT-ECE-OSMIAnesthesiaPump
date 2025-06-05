@@ -1,0 +1,96 @@
+#include <AccelStepper.h>
+#define dirPin 2
+#define stepPin 3
+
+AccelStepper stepper(AccelStepper::DRIVER,stepPin,dirPin);
+#define stepsPerRevolution 3200
+
+#define outputA 8
+#define outputB 9
+
+int counter = 0; 
+int aState;
+int aLastState;   
+
+
+float syringeSize = 60; //ml max syring amount
+float flowRate = 0; //ml/hr
+float mlPerMM = float(10/17.0); // 10 every 17 mm
+float numSteps = 0; //steps to empty the syringe
+float calcDelay = 0; //delay in half steps
+float mmPerRot = 10; // number of milimeters in a rotation
+float weight = 75.5; //kg of patient
+float ammount = 500; //grams of drug being administered
+float volume = 7; //ml of drug being delivered
+float dose = 75; //mcg/kg/min rate at which anesthesia is delivered by weight of patient
+float calcSpeed = 0;
+float encoderCalcSpeed = 0;
+//Calculates the required steps and delay to get the calculated flow rate and delivery ammount
+void calculation(){
+  float mlPerRot = mlPerMM*mmPerRot; //turns syringe and channel dimensions into information on how many milimeters are covered in a single motor rotation
+  float doseOrderedMin = dose*weight/1000; //mg/min turns the dose information into the dosage speed
+  float doseOrderedHr = doseOrderedMin*60;//mg/hr
+  flowRate = 420;//doseOrderedHr*volume/ammount; //ml/hr delivery rate
+  calcSpeed = 26*flowRate/(mlPerRot*27);//this is speed in steps/sec so we take mg/hr to deploy liquid
+  numSteps = stepsPerRevolution*volume/mlPerRot; //steps to get all the drug delivered from syringe
+  numSteps = numSteps*1.1;//there was some fine tuning to get it to go the proper distance, this fixes the error involved
+  calcDelay = 1800000/(flowRate/mlPerRot*stepsPerRevolution);//half step delay, for between low and high, and then high and low, is milliseconds an hour over flow rate in ml/hr
+  //over mililiters in a rotation, times steps per revolution
+  encoderCalcSpeed = calcSpeed*10/6;
+}
+
+void provideDose(){
+  stepper.moveTo(100);//numSteps);
+  stepper.setSpeed(1);//calcSpeed);
+  //Serial.println(numSteps);
+  //Serial.println(calcSpeed);
+  while(stepper.isRunning()){
+    stepper.runSpeedToPosition();
+  }
+  Serial.println("hello");
+  stepper.setCurrentPosition(0);
+  Serial.println(stepper.currentPosition());
+}
+void motorInit(){
+  pinMode(dirPin, OUTPUT);
+  pinMode(stepPin,OUTPUT);
+  stepper.setMaxSpeed(4800.0);
+  stepper.setAcceleration(100.0);
+  stepper.setCurrentPosition(0);
+  Serial.println(stepper.currentPosition());
+}
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  motorInit();
+  pinMode (outputA,INPUT);
+  pinMode (outputB,INPUT);
+  aLastState = digitalRead(outputA); 
+  attachInterrupt(digitalPinToInterrupt(outputA), encoderInterrupt, FALLING); 
+  delay(5000);
+  Serial.println("Hello");
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  //stepper.setCurrentPosition(0);
+  calculation();
+  provideDose();
+  delay(500);
+}
+
+void encoderInterrupt(){
+    aState = digitalRead(outputA); // Reads the "current" state of the outputA
+    // If the previous and the current state of the outputA are different, that means a Pulse has occured
+   if (aState != aLastState){     
+     // If the outputB state is different to the outputA state, that means the encoder is rotating clockwise
+     if (digitalRead(outputB) != aState) { 
+       counter ++;
+     } else {
+       counter --;
+     }
+    // Serial.print("Position: ");
+     //Serial.println(counter);
+   } 
+   aLastState = aState; // Updates the previous state of the outputA with the current state
+}

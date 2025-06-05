@@ -1,0 +1,138 @@
+#include <SPI.h>
+#include <Arduino.h>
+#include <TFT_eSPI.h> // Hardware-specific library
+#include <stdlib.h>
+TFT_eSPI tft = TFT_eSPI();
+
+#define TFT_GREY 0x5AEB // Custom grey color
+
+// Pin definitions for active-low buttons
+#define ENCODER_SW_PIN 27  //this is sw on encoder
+#define ENCODER_DT_PIN 26 //this is dt on encoder
+#define ENCODER_CLK_PIN 25 //this is clk on encoder
+
+const unsigned long debounceDelay = 50;
+unsigned long lastButtonPress = 0;
+unsigned long lastEncoderTurn = 0;
+
+int currentOption = 0;      // Index of the highlighted option
+int currentMenuLevel = 0;   // Current level in the menu
+int subMenuNum = 0;
+bool inSubMenu = false;     // Track if we're in a submenu
+bool stateChanged = false;
+
+// Define menu options for each level
+const char* mainMenu[] = {"Channel 1 Setup", "Channel 2 Setup", "Channel 3 Setup", "Channel 4 Setup", "Start Channels","Stop Channels"};
+const char* channelMenu[4][7] = {{"Syringe Size","Drug Name", "Weight 1", "Volume","Amount","Dose", "Back to Main"},{"Syringe Size","Drug Name", "Weight 2", "Volume","Amount","Dose", "Back to Main"},{"Syringe Size","Drug Name", "Weight 3", "Volume","Amount","Dose", "Back to Main"},{"Syringe Size","Drug Name", "Weight 4", "Volume","Amount","Dose", "Back to Main"}};
+
+
+int mainMenuSize = sizeof(mainMenu) / sizeof(mainMenu[0]);
+int subMenuSize = sizeof(channelMenu[0]) / sizeof(channelMenu[0][0]);
+
+void moveUp() {
+  currentOption = (currentOption - 1 + (inSubMenu ? subMenuSize : mainMenuSize)) % (inSubMenu ? subMenuSize : mainMenuSize);
+}
+
+void moveDown() {
+  currentOption = (currentOption + 1) % (inSubMenu ? subMenuSize : mainMenuSize);
+}
+
+void selectOption() {
+  if (!inSubMenu && currentOption <= 3) {
+    // Enter submenu
+    inSubMenu = true;
+    subMenuNum = currentOption;
+    currentOption = 0;
+  } 
+  else if (inSubMenu && currentOption == subMenuSize - 1) {
+    // Exit submenu
+    inSubMenu = false;
+    currentOption = 0;
+  }
+  else if(!inSubMenu && currentOption == 4){
+    startAll();
+  }
+  else if(!inSubMenu && currentOption == 5){
+    stopAll();
+  }
+  else{
+  }
+}
+
+void displayMenu() {
+  tft.fillScreen(TFT_GREY);
+  tft.setTextColor(TFT_WHITE, TFT_GREY);
+  tft.setTextFont(2);
+  tft.setTextSize(3);
+
+  const char** menu = inSubMenu ? channelMenu[subMenuNum] : mainMenu;
+  int menuSize = inSubMenu ? subMenuSize : mainMenuSize;
+
+  for (int i = 0; i < menuSize; i++) {
+    if (i == currentOption) {
+      // Highlight the current option
+      tft.setTextColor(TFT_BLACK, TFT_YELLOW);
+    } else {
+      tft.setTextColor(TFT_WHITE, TFT_GREY);
+    }
+    tft.setCursor(0, i * 70);
+    tft.println(menu[i]);
+  }
+}
+
+void stopAll(void){
+  //turn all motors speed and movement to zero
+  //for now flash the led
+  tft.fillScreen(TFT_RED);
+}
+
+void startAll(void){
+  //start all motors by setting speeds and movement distance
+  //for now flash screen
+  tft.fillScreen(TFT_GREEN);
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  tft.init();
+  //tft.setRotation(1);
+  digitalWrite(4,LOW);
+  digitalWrite(4,HIGH);
+  pinMode(ENCODER_SW_PIN,INPUT_PULLUP);
+  pinMode(ENCODER_DT_PIN,INPUT);
+  pinMode(ENCODER_CLK_PIN,INPUT);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_SW_PIN),buttonPressed,RISING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_CLK_PIN),turn,FALLING);
+  
+  displayMenu();
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  if(stateChanged){
+    displayMenu();
+    stateChanged = false;
+  }
+}
+
+void buttonPressed(void){
+  if (millis() - lastButtonPress > debounceDelay) {
+      lastButtonPress = millis();
+      selectOption();
+      stateChanged = true;
+  } 
+}
+
+void turn(void){
+  if (millis() - lastEncoderTurn > debounceDelay) {
+    if(digitalRead(ENCODER_DT_PIN)==HIGH){
+      moveDown();
+    }
+    else{
+      moveUp();
+    }
+    lastEncoderTurn = millis();
+    stateChanged = true;
+  }
+}

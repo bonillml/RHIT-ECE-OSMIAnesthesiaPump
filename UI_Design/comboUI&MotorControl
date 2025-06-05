@@ -1,0 +1,313 @@
+#include <SPI.h>
+#include <Arduino.h>
+#include <TFT_eSPI.h> // Hardware-specific library
+#include <stdlib.h>
+#include <AccelStepper.h>
+
+#define dirPin 32
+#define stepPin 33
+AccelStepper stepper[]={AccelStepper(AccelStepper::DRIVER,stepPin,dirPin)};
+#define stepsPerRevolution 3200
+double syringeSize[] = {60,60,60,60}; //ml max syring amount
+double flowRate = 0;
+double numSteps[] = {0,0,0,0}; //steps to empty the syringe
+double weight[] = {75.5,0,0,0}; //kg of patient
+double ammount[] = {500,0,0,0}; //grams of drug being administered
+double volume[] = {10,0,0,0}; //ml of drug being delivered
+double dose[] = {75,0,0,0}; //mcg/kg/min rate at which anesthesia is delivered by weight of patient
+double calcSpeed[] = {0,0,0,0};
+bool start = false;
+bool stop = false;
+
+bool subSubMenu = false;
+bool doseMenu = false;
+bool sizeMenu = false;
+bool weightMenu = false;
+bool ammountMenu = false;
+bool volumeMenu = false;
+
+void calculation(int i){
+  double mlPerRot = 0;
+  if(syringeSize[i]==60){
+    mlPerRot = double(10.0/17.0)*10; //turns syringe and channel dimensions into information on how many milimeters are covered in a single motor rotation
+  }
+  else{
+    mlPerRot = double(1.0/8.0)*10;
+  }
+  double doseOrderedMin = dose[i]*weight[i]/1000; //mg/min turns the dose information doubleo the dosage speed
+  double doseOrderedHr = doseOrderedMin*60;//mg/hr
+  flowRate = doseOrderedHr*volume[i]/ammount[i]; //ml/hr delivery rate
+  calcSpeed[i] = 26*flowRate/(mlPerRot*27);//this is speed in steps/sec so we take mg/hr to 
+  numSteps[i] = stepsPerRevolution*volume[i]/mlPerRot; //steps to get all the drug delivered from syringe
+  numSteps[i] = numSteps[i]*1.1;//there was some fine tuning to get it to go the proper distance, this fixes the error involved
+  //calcDelay[i] = 1800000/(flowRate[i]/mlPerRot*stepsPerRevolution);//half step delay, for between low and high, and then high and low, is milliseconds an hour over flow rate in ml/hr
+  //over mililiters in a rotation, times steps per revolution
+}
+
+void runMotors(){
+  stepper[0].runSpeedToPosition();
+  //stepper(1).runSpeedToPosition();
+  //stepper(2).runSpeedToPosition();
+  //stepper(3).runSpeedToPosition();
+}
+
+void provideDose(int i){
+  int stepNum = int(numSteps[i]);
+  double speed = double(calcSpeed[i]);
+  stepper[i].moveTo(stepNum);
+  stepper[i].setSpeed(speed);
+}
+
+void motorInit(){
+  pinMode(dirPin, OUTPUT);
+  pinMode(stepPin,OUTPUT);
+  stepper[0].setMaxSpeed(4800.0);
+  stepper[0].setAcceleration(100.0);
+  stepper[0].setCurrentPosition(0);
+  stepper[0].setSpeed(0);
+  Serial.println("init");
+}
+
+TFT_eSPI tft = TFT_eSPI();
+
+#define TFT_GREY 0x5AEB // Custom grey color
+
+// Pin definitions for active-low buttons
+#define ENCODER_SW_PIN 27  //this is sw on encoder
+#define ENCODER_DT_PIN 26 //this is dt on encoder
+#define ENCODER_CLK_PIN 25 //this is clk on encoder
+
+const unsigned long buttondebounceDelay = 50;
+const unsigned long turndebounceDelay = 50;
+unsigned long pressCount = 0;
+unsigned long lastButtonPress = 0;
+unsigned long lastEncoderTurn = 0;
+
+int currentOption = 0;      // Index of the highlighted option
+int subMenuNum = 0;
+bool inSubMenu = false;     // Track if we're in a submenu
+bool stateChanged = false;
+int position = 0;
+int posVal = 0;
+
+// Define menu options for each level
+const char* mainMenu[] = {"Channel 1 Setup", "Channel 2 Setup", "Channel 3 Setup", "Channel 4 Setup", "Start Channels","Stop Channels"};
+const char* channelMenu[] = {"Syringe Size","Dosage Rate", "Weight", "Volume","Amount", "Back to Main"};
+String valMenu = "000.0";
+const char* syringeMenu[] = {"60ml Syringe","10ml Syringe"};
+
+int mainMenuSize = sizeof(mainMenu) / sizeof(mainMenu[0]);
+int subMenuSize = sizeof(channelMenu) / sizeof(channelMenu[0]);
+int syringeMenuSize = sizeof(syringeMenu) / sizeof(syringeMenu[0]);
+
+void moveUp() {
+  if(subSubMenu){
+    if(sizeMenu){
+      currentOption = (currentOption - 1 + syringeMenuSize) % syringeMenuSize;
+    }
+    else{
+      posVal = (posVal - 1 + 10) % 10;
+    } 
+  }
+  else{
+    currentOption = (currentOption - 1 + (inSubMenu ? subMenuSize : mainMenuSize)) % (inSubMenu ? subMenuSize : mainMenuSize);
+  }
+
+}
+
+void moveDown() {
+  if(subSubMenu){
+    if(sizeMenu){
+      currentOption = (currentOption + 1) % syringeMenuSize;
+    }
+    else{
+      posVal = (posVal + 1) % 10;
+    } 
+  }
+  else{
+  currentOption = (currentOption + 1) % (inSubMenu ? subMenuSize : mainMenuSize);
+  }
+}
+
+void selectOption() {
+  if(subSubMenu){
+    if(sizeMenu){
+      if(currentOption == 0){
+        syringeSize[subMenuNum] = 60;
+      }
+      else{
+        syringeSize[subMenuNum] = 10;
+      }
+    }
+    else{
+      valMenu[position] = posVal;
+      position = position + 1; 
+      if(position == 2){
+        position = position + 1;
+      }
+      if(position == 4){
+        if(doseMenu){
+          dose[subMenuNum] = valMenu.toDouble();
+          doseMenu = false;
+        }
+        else if(weightMenu){
+          weight[subMenuNum] = valMenu.toDouble();
+          weightMenu = false;
+        }
+        else if(ammountMenu){
+          ammount[subMenuNum] = valMenu.toDouble();
+          ammountMenu = false;
+        }
+        else{
+          volume[subMenuNum] = valMenu.toDouble();
+          volumeMenu = false;
+        }
+        subSubMenu = false;
+        valMenu = "000.0";
+      }
+    }
+  }
+  else if (!inSubMenu && currentOption <= 3) {
+    // Enter submenu
+    inSubMenu = true;
+    subMenuNum = currentOption;
+    currentOption = 0;
+  }
+  else if(!inSubMenu && currentOption == 4){
+    start = true;//startAll();
+    currentOption = 0;
+  }
+  else if(!inSubMenu && currentOption == 5){
+    stop = true;//stopAll();
+    currentOption = 0;
+  } 
+  
+  else if (inSubMenu && currentOption == subMenuSize - 1) {
+    // Exit submenu
+    inSubMenu = false;
+    currentOption = 0;
+  }
+  else if(inSubMenu && currentOption == 0){
+    subSubMenu = true;
+    sizeMenu = true;
+  }
+  else if(inSubMenu && currentOption == 1){
+    subSubMenu = true;
+    doseMenu = true;
+    int position = 0;
+    int posVal = 0;
+  }
+  else if(inSubMenu && currentOption == 2){
+    subSubMenu = true;
+    weightMenu = true;
+    int position = 0;
+    int posVal = 0;
+  }
+  else if(inSubMenu && currentOption == 3){
+    subSubMenu = true;
+    volumeMenu = true;
+    int position = 0;
+    int posVal = 0;
+  }
+  else if(inSubMenu && currentOption == 4){
+    subSubMenu = true;
+    ammountMenu = true;
+    int position = 0;
+    int posVal = 0;
+  }
+  else{
+  }
+}
+
+void displayMenu() {
+  tft.fillScreen(TFT_GREY);
+  tft.setTextColor(TFT_WHITE, TFT_GREY);
+  tft.setTextFont(2);
+  tft.setTextSize(3);
+
+  const char** menu = inSubMenu ? channelMenu : mainMenu;
+  int menuSize = inSubMenu ? subMenuSize : mainMenuSize;
+  for (int i = 0; i < menuSize; i++) {
+    if (i == currentOption) {
+      // Highlight the current option
+      tft.setTextColor(TFT_BLACK, TFT_YELLOW);
+    } else {
+      tft.setTextColor(TFT_WHITE, TFT_GREY);
+    }
+    tft.setCursor(0, i * 70);
+    tft.println(menu[i]);
+  }
+}
+
+void stopAll(void){
+  //turn all motors speed and movement to zero
+  //for now flash the led
+  stepper[0].moveTo(stepper[0].currentPosition());
+}
+
+void startAll(void){
+  //start all motors by setting speeds and movement distance
+  //for now flash screen
+  calculation(0);
+  provideDose(0);
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  tft.init();
+  motorInit();
+  //tft.setRotation(1);
+  digitalWrite(4,LOW);
+  digitalWrite(4,HIGH);
+  pinMode(ENCODER_SW_PIN,INPUT_PULLUP);
+  pinMode(ENCODER_DT_PIN,INPUT);
+  pinMode(ENCODER_CLK_PIN,INPUT);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_SW_PIN),buttonPressed,FALLING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_CLK_PIN),turn,CHANGE);
+  
+  displayMenu();
+  Serial.println(subMenuSize);
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  if(stateChanged){
+    displayMenu();
+    stateChanged = false;
+  }
+  if(start){
+    startAll();
+    start = false;
+  }
+  if(stop){
+    stopAll();
+    stop = false;
+  }
+  runMotors();
+}
+
+void buttonPressed(void){
+  if ((millis() - lastButtonPress > buttondebounceDelay)) {
+    lastButtonPress = millis();
+    if(pressCount % 2 == 0) {
+      
+      selectOption();
+      stateChanged = true;
+    }
+    pressCount++;
+  } 
+}
+
+void turn(void){
+  if (millis() - lastEncoderTurn > turndebounceDelay) {
+    if(digitalRead(ENCODER_CLK_PIN) != digitalRead(ENCODER_DT_PIN)){
+      moveDown();
+    }
+    else{
+      moveUp();
+    }
+    lastEncoderTurn = millis();
+    stateChanged = true;
+  }
+}
