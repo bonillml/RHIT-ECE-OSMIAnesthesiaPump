@@ -7,24 +7,56 @@
 //TODO: set start position of motor + add to position instead of setting to 0 -> can be set to the sie of the pump 
 // ^ This can be a future task <-- instead maybe set current position instead of creating a new one
 
-// Define motor connections
-#define MOTOR1_DIR  14     //S3 numbers: 4
-#define MOTOR1_STEP 12     // 5
-#define MOTOR2_DIR  32     // 6
-#define MOTOR2_STEP 33     // 7  
-#define MOTOR3_DIR  21     // 1     //UI
-#define MOTOR3_STEP 3      // 2
-#define MOTOR4_DIR  0      // 42
-#define MOTOR4_STEP 15     // 41     //UI
 
-// Define Input connections
-#define ENCODER_SW_PIN 27  // this is sw on encoder
-#define ENCODER_DT_PIN 26  // this is dt on encoder
-#define ENCODER_CLK_PIN 25 // this is clk on encoder
+/*  Define motor connections
+*   
+*   THESE USE THE UPDATED ESP32-S3 SCHEMATIC
+*   Edited: June 5th, 2025
+*/
+#define MOTOR1_STEP   1
+#define MOTOR1_DIR    2
+#define MOTOR2_STEP   0
+#define MOTOR2_DIR    45
+#define MOTOR3_STEP   7 
+#define MOTOR3_DIR    6
+#define MOTOR4_STEP   18
+#define MOTOR4_DIR    17
+
+/*  Define rotary encoder input connections
+*
+*   THESE USE THE UPDATED ESP32-S3 SCHEMATIC
+*   Edited: June 5th, 2025
+*/
+#define ENCODER_SW_PIN  37
+#define ENCODER_DT_PIN  36
+#define ENCODER_CLK_PIN 35
+
+/*  Define motor connections (DEPRECATED)
+*
+*   THESE USE THE DEPRECATED ESP32 MICROCONTROLLER
+*   (The S3 numbers do not reflect the finalized mapping.)
+*/
+// #define MOTOR1_DIR  14     //S3 numbers: 4
+// #define MOTOR1_STEP 12     // 5
+// #define MOTOR2_DIR  32     // 6
+// #define MOTOR2_STEP 33     // 7  
+// #define MOTOR3_DIR  21     // 1     //UI
+// #define MOTOR3_STEP 3      // 2
+// #define MOTOR4_DIR  0      // 42
+// #define MOTOR4_STEP 15     // 41     //UI
+
+/*  Define Input connections
+* 
+*   THESE USE THE DEPRECATED ESP32 MICROCONTROLLER
+*/
+// #define ENCODER_SW_PIN 27  // this is sw on encoder
+// #define ENCODER_DT_PIN 26  // this is dt on encoder
+// #define ENCODER_CLK_PIN 25 // this is clk on encoder
 
 
 //UI declarations
 TFT_eSPI tft = TFT_eSPI();
+SPIClass spi = SPIClass();
 
 #define TFT_GREY 0x5AEB // Custom grey color
 
