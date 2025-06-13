@@ -1,11 +1,9 @@
-#include <A4988.h>
-#include <BasicStepperDriver.h>
-#include <DRV8825.h>
-#include <DRV8834.h>
-#include <DRV8880.h>
 #include <ESP32Encoder.h>
-#include <MultiDriver.h>
-#include <SyncDriver.h>
+#include <MultiStepperLite.h>
+#include <TFT_eSPI.h>
+#include <User_Setup_Select.h>
+
+
 
 /*      Global Variables      */
 // Motor steps per revolution. Most steppers are 200 steps or 1.8 degrees/step
@@ -24,37 +22,29 @@ const long debounceRE = 50;
 volatile int prevCountRE;
 volatile int curCountRE;
 
-// Define Stepper Motor Pins
-#define MOTOR1_STEP   1
-#define MOTOR1_DIR    2
-#define MOTOR2_STEP   35
-#define MOTOR2_DIR    45
-#define MOTOR3_STEP   7 
-#define MOTOR3_DIR    6
-#define MOTOR4_STEP   18
-#define MOTOR4_DIR    17
+// Define Stepper Motor Pins (0-based indexing)
+#define MOTOR0_STEP   1
+#define MOTOR0_DIR    2
+#define MOTOR1_STEP   35
+#define MOTOR1_DIR    45
+#define MOTOR2_STEP   7 
+#define MOTOR2_DIR    6
+#define MOTOR3_STEP   18
+#define MOTOR3_DIR    17
+
+int test = TFT_CS;
 
 // Define Stepper Motor Objects
-BasicStepperDriver stepper1(MOTOR_STEPS, MOTOR1_DIR, MOTOR1_STEP);
-BasicStepperDriver stepper2(MOTOR_STEPS, MOTOR2_DIR, MOTOR2_STEP);
-BasicStepperDriver stepper3(MOTOR_STEPS, MOTOR3_DIR, MOTOR3_STEP);
-BasicStepperDriver stepper4(MOTOR_STEPS, MOTOR4_DIR, MOTOR4_STEP);
-
-unsigned int allMotors[4] = {(unsigned int) &stepper1, 
-                             (unsigned int) &stepper2, 
-                             (unsigned int) &stepper3, 
-                             (unsigned int) &stepper4};
+MultiStepperLite steppers(4);
 int activeMotors[4] = {0, 0, 0, 0};
 
-
-
-// Define LCD Pins
-#define GFX_CS    11
-#define GFX_DC    9
-#define GFX_RST   10
-#define GFX_BL    8
-#define GFX_SCK   3
-#define GFX_MOSI  46
+// // Define LCD Pins
+// #define GFX_CS    11
+// #define GFX_DC    9
+// #define GFX_RST   10
+// #define GFX_BL    8
+// #define GFX_SCK   3
+// #define GFX_MOSI  46
 
 // Define Rotary Encoder Pins
 #define RE_CLK    38          // Encoder Pin A
@@ -81,18 +71,12 @@ void setup() {
   // Allow the correct Serial Baud Rate
   Serial.begin(115200);
   Serial.print("Booting Firmware\n");
-
-  Serial.print("Select a Stepper Motor to Activate: \n");
-  while (Serial.available() == 0);  // Wait to receive an input
-  int result = (Serial.readStringUntil('\n')).toInt();
-  Serial.print("Activating Stepper Motor " + String(result) + ".\n");
-  set_Active_Motor(result - 1);
 }
 
 void loop() {
 
   re_Interrupt();
-  RE_To_Manual_Stepper();
+  RE_To_Manual_Stepper(1);
 
 }
 
@@ -100,10 +84,60 @@ void loop() {
 *   Initializes all four stepper motors
 */
 void init_Stepper_Motors(void) {
-  stepper1.begin(RPM, MICROSTEPS);
-  stepper2.begin(RPM, MICROSTEPS);
-  stepper3.begin(RPM, MICROSTEPS);
-  stepper4.begin(RPM, MICROSTEPS);
+  pinMode(MOTOR0_DIR, OUTPUT);
+  pinMode(MOTOR1_DIR, OUTPUT);
+  pinMode(MOTOR2_DIR, OUTPUT);
+  pinMode(MOTOR3_DIR, OUTPUT);
+  digitalWrite(MOTOR0_DIR, LOW);
+  digitalWrite(MOTOR1_DIR, LOW);
+  digitalWrite(MOTOR2_DIR, LOW);
+  digitalWrite(MOTOR3_DIR, LOW);
+
+  steppers.init_stepper(0, MOTOR0_STEP);
+  steppers.init_stepper(1, MOTOR1_STEP);
+  steppers.init_stepper(2, MOTOR2_STEP);
+  steppers.init_stepper(3, MOTOR3_STEP);
+}
+
+/**
+*   Activate a Stepper Motor.
+*   Return a 0 if valid motor, -1 if invalid motor.
+*/
+int activate_Stepper_Motor(int motorNum, int numSteps) {
+
+  if (motorNum > 4 || motorNum < 1) {
+    return -1;
+  }
+
+  steppers.start_finite(motorNum, 4000, numSteps);
+  activeMotors[motorNum] = 1;
+  return 0;
+}
+
+/**
+*   Sets the direction of a Stepper Motor
+*/
+void set_Stepper_Motor_Direction(int motorNum, TURN_DIR dir) {
+
+  // If Clockwise, then go LOW ("Away from motor"); otherwise, go HIGH ("Toward motor");
+  int pinLevel = (dir == TURN_DIR::CW) ? LOW : HIGH;
+
+  switch (motorNum) {
+    case 0:
+      digitalWrite(MOTOR0_DIR, pinLevel);
+      break;
+    case 1:
+      digitalWrite(MOTOR1_DIR, pinLevel);
+      break;
+    case 2:
+      digitalWrite(MOTOR2_DIR, pinLevel);
+      break;
+    case 3:
+      digitalWrite(MOTOR3_DIR, pinLevel);
+      break;
+    default:
+      break;
+  }
 }
 
 /**
@@ -145,66 +179,41 @@ void re_Interrupt(void) {
 }
 
 /**
-*   Use the Rotary Encoder to manually move the active Stepper Motor
+*   Use the Rotary Encoder to manually move a selected Stepper Motor
 */ 
-void RE_To_Manual_Stepper(void) {
+void RE_To_Manual_Stepper(int motorNum) {
 
-  // Retrieve active stepper
-  BasicStepperDriver *p = get_Active_Motor();
   if (dirRE == TURN_DIR::CCW) {
-    (*p).move(MOTOR_STEPS * MICROSTEPS);
+    set_Stepper_Motor_Direction(motorNum, TURN_DIR::CCW);
+    if (steppers.is_finished(motorNum)) {
+      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS);
+    }
+    // else if (steppers.is_paused(motorNum)) {
+    //   steppers.resume(motorNum);
+    // }
   }
-
-  if (dirRE == TURN_DIR::CW) { 
-    (*p).move(-MOTOR_STEPS * MICROSTEPS);
+  else if (dirRE == TURN_DIR::CW) { 
+    set_Stepper_Motor_Direction(motorNum, TURN_DIR::CW);
+    if (steppers.is_finished(motorNum)) {
+      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS);
+    }
+    // else if (steppers.is_paused(motorNum)) {
+    //   steppers.resume(motorNum);
+    // }
   }
+  steppers.do_tasks();
 }
 
 /**
-*   Sets one of four Stepper Motors as activated, or selected.
-*   Will deactivate, or deselect, all other activated Stepper Motors.
+*     Returns an integer to the active Stepper Motor.
+*     Returns -1 if there are no active Stepper Motors.
 */
-void set_Active_Motor(short num) {
-  for (int i = 0; i < std::size(activeMotors); i++) {
-    if (i == num) {
-      activeMotors[i] = 1;
-    }
-    else {
-      activeMotors[i] = 0;
-    }
-  }
-}
-
-/**
-*     Returns a pointer to the active Stepper Motor
-*/
-BasicStepperDriver *get_Active_Motor(void) {
-
-  // Create pointer to-be-returned
-  BasicStepperDriver *p = nullptr;
+int get_Active_Motor(void) {
 
   for (int i = 0; i < std::size(activeMotors); i++) {
     if (activeMotors[i] == 1) {
-      return (p = (BasicStepperDriver *)allMotors[i]);
+      return i;
     }
   }
-
-  return p; 
-}
-
-/**
-*     Returns a pointer to a specified Stepper Motor
-*/
-BasicStepperDriver *get_Specific_Motor(short num) {
-    
-  // Create pointer to-be-returned
-  BasicStepperDriver *p = nullptr;
-
-  switch (num) {
-    case 1: return (p = &stepper1);
-    case 2: return (p = &stepper2);
-    case 3: return (p = &stepper3);
-    case 4: return (p = &stepper4);
-    default: return p;
-  }
+  return -1; 
 }
