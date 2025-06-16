@@ -15,9 +15,13 @@
 // 1=full step, 2=half step etc.
 #define MICROSTEPS 4
 
-// Board time since previous Rotary Encoder switch press
+// Board time since previous Rotary Encoder turn
 unsigned long prevTimeRE = 0;
 const long debounceRE = 50;
+
+// Board time since previous Rotary Encoder switch press
+unsigned long prevTimeSW = 0;
+const long debounceSW= 50;
 
 volatile int prevCountRE;
 volatile int curCountRE;
@@ -54,6 +58,8 @@ int activeMotors[4] = {0, 0, 0, 0};
 // Define Rotary Encoder Object
 ESP32Encoder re;
 
+// Define Rotary Encoder variables and direction enumeration
+#define RE_SCROLL_COUNT 2
 enum TURN_DIR {
   CW,         // Clockwise
   CCW,        // Counter-clockwise
@@ -61,7 +67,34 @@ enum TURN_DIR {
 };
 TURN_DIR dirRE = TURN_DIR::STOP; 
 
+// Define menu arrays and subarrays
+String menu[4][4] = {{"Channel 1", "C1 Item 1", "C1 Item 2", "C1 Item 3"},
+                     {"Channel 2", "C2 Item 1", "C2 Item 2", "C2 Item 3"}, 
+                     {"Channel 3", "C3 Item 1", "C3 Item 2", "C3 Item 3"}, 
+                     {"Channel 4", "C4 Item 1", "C4 Item 2", "C4 Item 3"}};
+enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display 
+  MAIN,       // Displays the main menu options
+  CHANNEL1,   // Displays pump channel 1 menu options
+  CHANNEL2,   // Displays pump channel 2 menu options
+  CHANNEL3,   // Displays pump channel 3 menu options
+  CHANNEL4    // Displays pump channel 4 menu options
+};
+ACTIVE_MENU_WINDOW activeWindow = ACTIVE_MENU_WINDOW::MAIN;
 
+enum ACTIVE_MENU_ITEM {
+  Channel_1,
+  Channel_2,
+  Channel_3,
+  Channel_4
+};
+ACTIVE_MENU_ITEM activeItem = ACTIVE_MENU_ITEM::Channel_1;
+
+// Structure that will store each channel's configuration
+struct PumpChannel {
+  unsigned short motorNumber;       // The motor number of this channel
+  double travelTime;                // The amount of time required to push the syringe from start to finish.  
+
+};
 
 void setup() {
   // Initializes all four Stepper Motors.
@@ -75,8 +108,8 @@ void setup() {
 
 void loop() {
 
-  re_Interrupt();
-  RE_To_Manual_Stepper(1);
+  re_Controller();
+  //re_To_Manual_Stepper(0);
 
 }
 
@@ -105,7 +138,7 @@ void init_Stepper_Motors(void) {
 */
 int activate_Stepper_Motor(int motorNum, int numSteps) {
 
-  if (motorNum > 4 || motorNum < 1) {
+  if (motorNum > 3 || motorNum < 0) {
     return -1;
   }
 
@@ -145,6 +178,9 @@ void set_Stepper_Motor_Direction(int motorNum, TURN_DIR dir) {
 */
 void init_Rotary_Encoder(void) {
 
+  pinMode(RE_SW, INPUT);
+  attachInterrupt(digitalPinToInterrupt(RE_SW), re_SWInterrupt, RISING);
+
   ESP32Encoder::useInternalWeakPullResistors = puType::up;
   re.attachFullQuad(RE_CLK, RE_DT);
   re.setCount(0);
@@ -152,36 +188,59 @@ void init_Rotary_Encoder(void) {
 }
 
 /**
-*      Acts as the interrupt for the Rotary Encoder
+*      Controls the counting and direction detection of the Rotary Encoder
 */
-void re_Interrupt(void) {
+void re_Controller(void) {
     // Obtain the current time
     unsigned long curTimeRE = millis();
 
     if (curTimeRE - prevTimeRE >= debounceRE) {
       prevTimeRE = curTimeRE;
 
-      curCountRE = re.getCount();
+      curCountRE = (int) (re.getCount() / 2);
 
       // Check to see if the Rotary Encoder has moved.
       // If it has, determine the direction of rotation.
       if (curCountRE != prevCountRE) {
         dirRE = (curCountRE - prevCountRE > 0) ? TURN_DIR::CCW : TURN_DIR::CW;
-        Serial.print("Encoder count = " + String((int32_t) re.getCount()) + " \n");
-        Serial.print("Going Direction: " + String((dirRE == TURN_DIR::CCW) ? "CCW" : "CW") + " \n");
+
+        // Determine if the Rotary Encoder has moved enough to warrant menu scrolling
+        if (curCountRE % RE_SCROLL_COUNT == 0) {
+          Serial.print("Scrolling Through Menu\n");
+          update_Scroll_Menu(dirRE);
+          print_Scroll_Menu();
+        }
+
+        // Print results for debugging
+        // Serial.print("Encoder count = " + String((int32_t) curCountRE) + " \n");
+        // Serial.print("Going Direction: " + String((dirRE == TURN_DIR::CCW) ? "CCW" : "CW") + " \n");
       }
       else {
         dirRE = TURN_DIR::STOP;
       } 
-      prevCountRE = re.getCount();
+      prevCountRE = curCountRE;
     }
 
 }
 
 /**
+*       Acts as the interrupt for the Rotary Encoder's push switch
+*/
+void re_SWInterrupt(void) {
+
+    unsigned long curTimeSW = millis();
+
+    if (curTimeSW - prevTimeSW >= debounceSW) {
+      prevTimeSW = curTimeSW;
+
+      Serial.print("You pressed the Switch!\n Nice...\n");
+    }
+}
+
+/**
 *   Use the Rotary Encoder to manually move a selected Stepper Motor
 */ 
-void RE_To_Manual_Stepper(int motorNum) {
+void re_To_Manual_Stepper(int motorNum) {
 
   if (dirRE == TURN_DIR::CCW) {
     set_Stepper_Motor_Direction(motorNum, TURN_DIR::CCW);
@@ -216,4 +275,98 @@ int get_Active_Motor(void) {
     }
   }
   return -1; 
+}
+
+/**
+*     Updates the scroll menu
+*     (Currently, only for Serial Monitor)
+*/
+void  update_Scroll_Menu(TURN_DIR dir) {
+
+  int activeItemInt = activeItem;
+
+  switch(activeWindow) {
+    case ACTIVE_MENU_WINDOW::CHANNEL1:
+
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2:
+
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3:
+
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4:
+
+      break;
+
+    default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
+      if (dir == TURN_DIR::CW) {
+        activeItemInt++;
+        activeItemInt %= 4;
+      }
+      else if (dir == TURN_DIR::CCW) {
+        activeItemInt--;
+        activeItemInt = (activeItemInt < 0) ? activeItemInt + 4 : activeItemInt;
+      }
+      activeItem = (ACTIVE_MENU_ITEM) activeItemInt;
+      break;
+  }
+}
+
+/**
+*     Prints the scroll menu
+*     (Currently, only for Serial Monitor)
+*/
+void print_Scroll_Menu(void) {
+  String linePrint;
+  int activeItemLoopIndex;
+
+  Serial.print("\n\n\n\n\n\n\n\n");
+  switch(activeWindow) {    
+    case ACTIVE_MENU_WINDOW::CHANNEL1:
+
+      Serial.print("--- Channel 1 ---\n");
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2:
+
+      Serial.print("--- Channel 2 ---\n");
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3:
+
+      Serial.print("--- Channel 3 ---\n");
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4:
+      Serial.print("--- Channel 4 ---\n");
+      break;
+    
+    default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
+
+      switch(activeItem) {
+        case ACTIVE_MENU_ITEM::Channel_2:
+            activeItemLoopIndex = 1;
+          break;
+        case ACTIVE_MENU_ITEM::Channel_3:
+            activeItemLoopIndex = 2;
+          break;
+        case ACTIVE_MENU_ITEM::Channel_4:
+            activeItemLoopIndex = 3;
+          break;
+        default: // Also for ACTIVE_MENU_WINDOW::CHANNEL1:
+            activeItemLoopIndex = 0;
+          break;
+      }
+
+      Serial.print("--- Main Menu ---\n");
+      for (int i = 0; i < std::size(menu); i++) {
+        linePrint = menu[i][0] + " " + ((activeItemLoopIndex == i) ? "<\n" : "\n");
+        Serial.print(linePrint);
+      }
+      break;
+  }
 }
