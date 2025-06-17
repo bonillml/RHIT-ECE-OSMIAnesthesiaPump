@@ -1,9 +1,7 @@
 #include <ESP32Encoder.h>
 #include <MultiStepperLite.h>
+#include <SPI.h>
 #include <TFT_eSPI.h>
-#include <User_Setup_Select.h>
-
-
 
 /*      Global Variables      */
 // Motor steps per revolution. Most steppers are 200 steps or 1.8 degrees/step
@@ -67,11 +65,14 @@ enum TURN_DIR {
 };
 TURN_DIR dirRE = TURN_DIR::STOP; 
 
+// Define LCD Object
+TFT_eSPI tft = TFT_eSPI();
+
 // Define menu arrays and subarrays
-String menu[4][4] = {{"Channel 1", "C1 Item 1", "C1 Item 2", "C1 Item 3"},
-                     {"Channel 2", "C2 Item 1", "C2 Item 2", "C2 Item 3"}, 
-                     {"Channel 3", "C3 Item 1", "C3 Item 2", "C3 Item 3"}, 
-                     {"Channel 4", "C4 Item 1", "C4 Item 2", "C4 Item 3"}};
+String menu[4][6] = {{"Channel 1", "C1 Item 1", "C1 Item 2", "C1 Item 3", "C1 Item 4","Main Menu"},
+                     {"Channel 2", "C2 Item 1", "C2 Item 2", "C2 Item 3", "C2 Item 4","Main Menu"}, 
+                     {"Channel 3", "C3 Item 1", "C3 Item 2", "C3 Item 3", "C3 Item 4","Main Menu"}, 
+                     {"Channel 4", "C4 Item 1", "C4 Item 2", "C4 Item 3", "C4 Item 4","Main Menu"}};
 enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display 
   MAIN,       // Displays the main menu options
   CHANNEL1,   // Displays pump channel 1 menu options
@@ -82,12 +83,39 @@ enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display
 ACTIVE_MENU_WINDOW activeWindow = ACTIVE_MENU_WINDOW::MAIN;
 
 enum ACTIVE_MENU_ITEM {
-  Channel_1,
-  Channel_2,
-  Channel_3,
-  Channel_4
+  Channel_1,  // Main Menu Channel 1
+  Channel_2,  // Main Menu Channel 2
+  Channel_3,  // Main Menu Channel 3
+  Channel_4,  // Main Menu Channel 4
+
+  C1_I1,      // Channel 1 Item 1
+  C1_I2,      // Channel 1 Item 2
+  C1_I3,      // Channel 1 Item 3
+  C1_I4,      // Channel 1 Item 4
+  C1_MM,      // Channel 1 Main Menu
+
+  C2_I1,      // Channel 2 Item 1
+  C2_I2,      // Channel 2 Item 2
+  C2_I3,      // Channel 2 Item 3
+  C2_I4,      // Channel 2 Item 4
+  C2_MM,      // Channel 2 Main Menu
+
+  C3_I1,      // Channel 3 Item 1
+  C3_I2,      // Channel 3 Item 2
+  C3_I3,      // Channel 3 Item 3
+  C3_I4,      // Channel 3 Item 4
+  C3_MM,      // Channel 3 Main Menu
+
+  C4_I1,      // Channel 4 Item 1
+  C4_I2,      // Channel 4 Item 2
+  C4_I3,      // Channel 4 Item 3
+  C4_I4,      // Channel 4 Item 4
+  C4_MM       // Channel 4 Main Menu
 };
 ACTIVE_MENU_ITEM activeItem = ACTIVE_MENU_ITEM::Channel_1;
+short menuOn = 1;
+short curSWCount = 0;  // Tells Rotary Encoder when to switch menu windows
+short prevSWCount = 0;
 
 // Structure that will store each channel's configuration
 struct PumpChannel {
@@ -100,6 +128,7 @@ void setup() {
   // Initializes all four Stepper Motors.
   init_Stepper_Motors();
   init_Rotary_Encoder();
+  init_LCD_Menu();
 
   // Allow the correct Serial Baud Rate
   Serial.begin(115200);
@@ -108,6 +137,13 @@ void setup() {
 
 void loop() {
 
+  // Check to see if the menu needs to update windows
+  if (curSWCount != prevSWCount) {
+    switch_Scroll_Menu();
+    prevSWCount = curSWCount;
+  }
+
+  // Check to see if Rotary Encoder performed actions
   re_Controller();
   //re_To_Manual_Stepper(0);
 
@@ -206,14 +242,9 @@ void re_Controller(void) {
 
         // Determine if the Rotary Encoder has moved enough to warrant menu scrolling
         if (curCountRE % RE_SCROLL_COUNT == 0) {
-          Serial.print("Scrolling Through Menu\n");
           update_Scroll_Menu(dirRE);
           print_Scroll_Menu();
         }
-
-        // Print results for debugging
-        // Serial.print("Encoder count = " + String((int32_t) curCountRE) + " \n");
-        // Serial.print("Going Direction: " + String((dirRE == TURN_DIR::CCW) ? "CCW" : "CW") + " \n");
       }
       else {
         dirRE = TURN_DIR::STOP;
@@ -227,13 +258,18 @@ void re_Controller(void) {
 *       Acts as the interrupt for the Rotary Encoder's push switch
 */
 void re_SWInterrupt(void) {
-
     unsigned long curTimeSW = millis();
 
     if (curTimeSW - prevTimeSW >= debounceSW) {
       prevTimeSW = curTimeSW;
 
       Serial.print("You pressed the Switch!\n Nice...\n");
+
+      // Perform Menu Actions if menu on
+      if (menuOn == 1) {
+        prevSWCount = curSWCount;
+        curSWCount ^= 1;
+      }
     }
 }
 
@@ -278,29 +314,73 @@ int get_Active_Motor(void) {
 }
 
 /**
-*     Updates the scroll menu
-*     (Currently, only for Serial Monitor)
+*     Initiallizes the LCD Screen and Menu
 */
-void  update_Scroll_Menu(TURN_DIR dir) {
+void init_LCD_Menu(void) {
+  tft.init();
+  tft.setRotation(2);
+  print_Scroll_Menu();
+}
+
+/**
+*     Updates the scroll menu's active item
+*/
+void update_Scroll_Menu(TURN_DIR dir) {
 
   int activeItemInt = activeItem;
 
   switch(activeWindow) {
     case ACTIVE_MENU_WINDOW::CHANNEL1:
-
-      break;
+      activeItemInt -= 4;   // Set Channel 1's start to 0
+      if (dir == TURN_DIR::CW) {
+        activeItemInt++;
+        activeItemInt %= 5;
+      }
+      else if (dir == TURN_DIR::CCW) {
+        activeItemInt--;
+        activeItemInt = (activeItemInt < 0) ? activeItemInt + 5 : activeItemInt;
+      }
+      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + 4);
+      break; // End update from Channel 1
 
     case ACTIVE_MENU_WINDOW::CHANNEL2:
-
-      break;
+      activeItemInt -= 9;   // Set Channel 1's start to 0
+      if (dir == TURN_DIR::CW) {
+        activeItemInt++;
+        activeItemInt %= 5;
+      }
+      else if (dir == TURN_DIR::CCW) {
+        activeItemInt--;
+        activeItemInt = (activeItemInt < 0) ? activeItemInt + 5 : activeItemInt;
+      }
+      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + 9);
+      break; // End update from Channel 2
 
     case ACTIVE_MENU_WINDOW::CHANNEL3:
-
-      break;
+      activeItemInt -= 14;   // Set Channel 1's start to 0
+      if (dir == TURN_DIR::CW) {
+        activeItemInt++;
+        activeItemInt %= 5;
+      }
+      else if (dir == TURN_DIR::CCW) {
+        activeItemInt--;
+        activeItemInt = (activeItemInt < 0) ? activeItemInt + 5 : activeItemInt;
+      }
+      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + 14);
+      break; // End update from Channel 3
 
     case ACTIVE_MENU_WINDOW::CHANNEL4:
-
-      break;
+      activeItemInt -= 19;   // Set Channel 1's start to 0
+      if (dir == TURN_DIR::CW) {
+        activeItemInt++;
+        activeItemInt %= 5;
+      }
+      else if (dir == TURN_DIR::CCW) {
+        activeItemInt--;
+        activeItemInt = (activeItemInt < 0) ? activeItemInt + 5 : activeItemInt;
+      }
+      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + 19);
+      break; // End update from Channel 4
 
     default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
       if (dir == TURN_DIR::CW) {
@@ -312,8 +392,143 @@ void  update_Scroll_Menu(TURN_DIR dir) {
         activeItemInt = (activeItemInt < 0) ? activeItemInt + 4 : activeItemInt;
       }
       activeItem = (ACTIVE_MENU_ITEM) activeItemInt;
-      break;
+      break; // End update from Main Menu
   }
+}
+
+/**
+*     Controls the scroll menu's active window
+*/
+void switch_Scroll_Menu(void) {
+
+  switch(activeWindow) {
+    case ACTIVE_MENU_WINDOW::CHANNEL1:
+
+      switch(activeItem) {
+        case ACTIVE_MENU_ITEM::C1_I1:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C1_I2:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C1_I3:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C1_I4:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        default: // Also for ACTIVE_MENU_ITEM::C1_MM:
+            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+            activeItem = ACTIVE_MENU_ITEM::Channel_1;
+          break;
+      }
+
+      break; // End switch from Channel 1
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2:
+      switch(activeItem) {
+        case ACTIVE_MENU_ITEM::C2_I1:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C2_I2:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C2_I3:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C2_I4:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        default: // Also for ACTIVE_MENU_ITEM::C2_MM:
+            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+            activeItem = ACTIVE_MENU_ITEM::Channel_1;
+          break;
+      }
+      break; // End switch from Channel 2
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3:
+      switch(activeItem) {
+        case ACTIVE_MENU_ITEM::C3_I1:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C3_I2:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C3_I3:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C3_I4:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        default: // Also for ACTIVE_MENU_ITEM::C3_MM:
+            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+            activeItem = ACTIVE_MENU_ITEM::Channel_1;
+          break;
+      }
+      break; // End switch from Channel 3
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4:
+      switch(activeItem) {
+        case ACTIVE_MENU_ITEM::C4_I1:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C4_I2:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C4_I3:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        case ACTIVE_MENU_ITEM::C4_I4:
+            //activeWindow = 
+            //activeItem = 
+          break;
+        default: // Also for ACTIVE_MENU_ITEM::C4_MM:
+            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+            activeItem = ACTIVE_MENU_ITEM::Channel_1;
+          break;
+      }
+      break; // End switch from Channel 4
+
+    default: // Also for ACTIVE_MENU_WINDOW::MAIN:
+
+      switch(activeItem) {
+        case ACTIVE_MENU_ITEM::Channel_2:
+            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+            activeItem = ACTIVE_MENU_ITEM::C2_I1;
+          break;
+        case ACTIVE_MENU_ITEM::Channel_3:
+            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+            activeItem = ACTIVE_MENU_ITEM::C3_I1;
+          break;
+        case ACTIVE_MENU_ITEM::Channel_4:
+            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+            activeItem = ACTIVE_MENU_ITEM::C4_I1;
+          break;
+        default: // Also for ACTIVE_MENU_WINDOW::CHANNEL1:
+            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+            activeItem = ACTIVE_MENU_ITEM::C1_I1;
+          break;
+      }
+
+      break; // End switch from Main Menu
+  }
+
+  print_Scroll_Menu();
 }
 
 /**
@@ -321,52 +536,162 @@ void  update_Scroll_Menu(TURN_DIR dir) {
 *     (Currently, only for Serial Monitor)
 */
 void print_Scroll_Menu(void) {
+  
+  // Fill screen with light grey
+  tft.fillScreen(TFT_LIGHTGREY);
+
+  // Set "cursor" at top left corner of display (0,0) and select font 2
+  // (cursor will move to next line automatically during printing with 'tft.println'
+  //  or stay on the line is there is room for the text with tft.print)
+  tft.setCursor(0, 0, 2);
+
+  // Set the font colour to be white with a black background
+  tft.setTextColor(TFT_BLACK,TFT_LIGHTGREY);  
+  // Set text size multiplier to 7
+  tft.setTextSize(4);
+
   String linePrint;
   int activeItemLoopIndex;
 
-  Serial.print("\n\n\n\n\n\n\n\n");
+  // Print respective menu page
   switch(activeWindow) {    
     case ACTIVE_MENU_WINDOW::CHANNEL1:
 
-      Serial.print("--- Channel 1 ---\n");
-      break;
+      // Find the location of the item in the menu matrix
+      activeItemLoopIndex = (int)(activeItem) - 4 + 1;
+
+      // Print menu header
+      tft.println("  Channel 1\n-------------");
+
+      // Print each current menu option
+      for (int i = 1; i < std::size(menu[0]); i++) {
+
+        // Grab the item from the menu options
+        linePrint = menu[0][i];
+
+        // Check if the item is currently highlighted
+        if (activeItemLoopIndex == i) {
+          linePrint += " <";
+          tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+        } else {
+          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        }
+
+        // Print the item 
+        tft.println(linePrint);  
+      }
+
+      break; // End print from Channel 1
 
     case ACTIVE_MENU_WINDOW::CHANNEL2:
 
-      Serial.print("--- Channel 2 ---\n");
-      break;
+      // Find the location of the item in the menu matrix
+      activeItemLoopIndex = (int)(activeItem) - 9 + 1;
+
+      // Print menu header
+      tft.println("  Channel 2\n-------------");
+
+      // Print each current menu option
+      for (int i = 1; i < std::size(menu[1]); i++) {
+
+        // Grab the item from the menu options
+        linePrint = menu[1][i];
+
+        // Check if the item is currently highlighted
+        if (activeItemLoopIndex == i) {
+          linePrint += " <";
+          tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+        } else {
+          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        }
+
+        // Print the item 
+        tft.println(linePrint);  
+      }
+
+      break; // End print from Channel 2
 
     case ACTIVE_MENU_WINDOW::CHANNEL3:
 
-      Serial.print("--- Channel 3 ---\n");
-      break;
+      // Find the location of the item in the menu matrix
+      activeItemLoopIndex = (int)(activeItem) - 14 + 1;
+
+      // Print menu header
+      tft.println("  Channel 3\n-------------");
+
+      // Print each current menu option
+      for (int i = 1; i < std::size(menu[2]); i++) {
+
+        // Grab the item from the menu options
+        linePrint = menu[2][i];
+
+        // Check if the item is currently highlighted
+        if (activeItemLoopIndex == i) {
+          linePrint += " <";
+          tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+        } else {
+          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        }
+
+        // Print the item 
+        tft.println(linePrint);  
+      }
+
+      break; // End print from Channel 3
 
     case ACTIVE_MENU_WINDOW::CHANNEL4:
-      Serial.print("--- Channel 4 ---\n");
-      break;
+
+      // Find the location of the item in the menu matrix
+      activeItemLoopIndex = (int)(activeItem) - 19  + 1;
+
+      // Print menu header
+      tft.println("  Channel 4\n-------------");
+
+      // Print each current menu option
+      for (int i = 1; i < std::size(menu[3]); i++) {
+
+        // Grab the item from the menu options
+        linePrint = menu[3][i];
+
+        // Check if the item is currently highlighted
+        if (activeItemLoopIndex == i) {
+          linePrint += " <";
+          tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+        } else {
+          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        }
+
+        // Print the item 
+        tft.println(linePrint);  
+      }
+
+      break; // End print from Channel 4
     
     default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
 
-      switch(activeItem) {
-        case ACTIVE_MENU_ITEM::Channel_2:
-            activeItemLoopIndex = 1;
-          break;
-        case ACTIVE_MENU_ITEM::Channel_3:
-            activeItemLoopIndex = 2;
-          break;
-        case ACTIVE_MENU_ITEM::Channel_4:
-            activeItemLoopIndex = 3;
-          break;
-        default: // Also for ACTIVE_MENU_WINDOW::CHANNEL1:
-            activeItemLoopIndex = 0;
-          break;
-      }
+      // Find the location of the item in the menu matrix
+      activeItemLoopIndex = (int)(activeItem);
 
-      Serial.print("--- Main Menu ---\n");
+      // Print menu header
+      tft.println(" Main Menu\n-------------");
+
+      // Print each current menu option 
       for (int i = 0; i < std::size(menu); i++) {
-        linePrint = menu[i][0] + " " + ((activeItemLoopIndex == i) ? "<\n" : "\n");
-        Serial.print(linePrint);
+        
+        // Grab the item from the menu options
+        linePrint = menu[i][0];
+
+        // Check if the item is currently highlighted
+        if (activeItemLoopIndex == i) {
+          linePrint += " <";
+          tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+        } else {
+          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        }
+
+        // Print the item 
+        tft.println(linePrint);
       }
-      break;
+      break; // End print from Main Menu
   }
 }
