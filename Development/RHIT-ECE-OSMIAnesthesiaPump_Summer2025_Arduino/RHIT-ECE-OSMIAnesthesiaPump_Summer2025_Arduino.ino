@@ -146,14 +146,43 @@ short curSWCount = 0;  // Tells Rotary Encoder when to switch menu windows
 short prevSWCount = 0;
 
 // Structure that will store each channel's configuration
+
+/*  Determines the status of a pump channel
+*
+*   Is used as a redundancy and for optimization.
+*/
+enum PUMP_STATUS {
+  IDLE,
+  CONFIG,
+  CALIBRATE,
+  RUNNING,
+  PAUSED,
+  COMPLETE
+};
+
+/*  Determines the resolution of inputs
+*   
+*   Is used for dosage and bound constraints
+*/
+enum RES_STATUS {
+  ONES = 1,
+  TENTHS = 10,
+  HUNDREDTHS = 100,
+  RES_DONE = 1000
+};
+
 typedef struct PumpChannel {
-  unsigned short motorNumber = 0;       // The motor number of this channel
-  double dosage = 0.0;           // The amount of medicine in either mL or mg/kg
-  double infusionRate = 0.0;     // The rate at which to pump the medcine in either mL/hr or mg/kg/hr
-  double syringeStart = 0.0;     // The length marker on the track where the pump will start pushing the syringe.
-  double syringeEnd = 0.0;       // The length marker on the tracker at which the syringe can no longer be pushed.
-  unsigned long stepCount = 0;          // The amount of steps this channel needs to take to complete its infusion.
-  unsigned long stepDelay = 0;          // The amount of time needed between steps to ensure the correct infusion rate.
+  unsigned short motorNumber = 0;           // The motor number of this channel
+  PUMP_STATUS pstat = PUMP_STATUS::IDLE;    // The status of the pump channel.
+  RES_STATUS rstat = RES_STATUS::ONES;      // The current resolution digit for inputs.
+  double dosage = 0.0;                      // The amount of medicine in either mL or mg/kg
+  double infusionRate = 0.0;                // The rate at which to pump the medcine in either mL/hr or mg/kg/hr
+  double syringeStart = 0.0;                // The length marker on the track where the pump will start pushing the syringe.
+  double syringeEnd = 0.0;                  // The length marker on the tracker at which the syringe can no longer be pushed.
+  unsigned long stepCount = 0;              // The amount of steps this channel needs to take to complete its infusion.
+  unsigned long stepDelay = 0;              // The amount of time needed between steps to ensure the correct infusion rate.
+
+  double resolutionCodes[2] = {0.0, 0.0};       // The return code and error when exceeding set parameter bounds.
 }Pump_Channel;
 
 // Create instances of the pump channel structure for each channel.
@@ -184,8 +213,6 @@ void loop() {
     prevSWCount = curSWCount;
   }
 
-  
-
   // Check to see if Rotary Encoder performed actions
   steppers.do_tasks();
   if (!calibrating)
@@ -195,6 +222,8 @@ void loop() {
   }
 
 }
+
+/* ---------- METHODS FOR INITIALIZING HARDWARE ---------- */
 
 /**
 *   Initializes all four stepper motors
@@ -218,8 +247,99 @@ void init_Stepper_Motors(void) {
   pumpChannel2.motorNumber = 2;
   pumpChannel3.motorNumber = 3;
   pumpChannel4.motorNumber = 4;
+
+  pumpChannel1.pstat = PUMP_STATUS::IDLE;
+  pumpChannel2.pstat = PUMP_STATUS::IDLE;
+  pumpChannel3.pstat = PUMP_STATUS::IDLE;
+  pumpChannel4.pstat = PUMP_STATUS::IDLE;
 }
 
+/**
+*     Initializes the Rotary Encoder
+*/
+void init_Rotary_Encoder(void) {
+
+  pinMode(RE_SW, INPUT);
+  attachInterrupt(digitalPinToInterrupt(RE_SW), re_SWInterrupt, RISING);
+
+  ESP32Encoder::useInternalWeakPullResistors = puType::up;
+  re.attachFullQuad(RE_CLK, RE_DT);
+  re.setCount(0);
+  prevCountRE = re.getCount();
+}
+
+/**
+*     Initiallizes the LCD Screen and Menu
+*/
+void init_LCD_Menu(void) {
+  tft.init();
+  tft.setRotation(2);
+  print_Scroll_Menu();
+}
+
+/* ---------- METHODS FOR ROTARY ENCODER ACTIONS ---------- *
+
+/**
+*      Controls the counting and direction detection of the Rotary Encoder
+*/
+void re_Controller(void) {
+
+  // Obtain the current time
+  unsigned long curTimeRE = millis();
+
+  if (curTimeRE - prevTimeRE >= debounceRE) {
+    prevTimeRE = curTimeRE;
+
+    curCountRE = (int) (re.getCount() / 2);
+
+    // Check to see if the Rotary Encoder has moved.
+    // If it has, determine the direction of rotation.
+    if (curCountRE != prevCountRE) {
+      dirRE = (curCountRE - prevCountRE > 0) ? TURN_DIR::CCW : TURN_DIR::CW;
+
+      // Determine if the Rotary Encoder has moved enough to warrant menu scrolling
+      if (curCountRE % RE_SCROLL_COUNT == 0 && menuOn == 1) {
+
+        // If menu is on a channel item window, perform that window's action
+        if ((int)(activeWindow) - 5 >= 0) {
+          perform_Menu_Action(dirRE);
+        }
+
+        // Boolean conditions to reduce menu scrolling/refreshing
+        short onMainMenus = ((int)(activeWindow) <= 4);                 // Determines if on a main menu window.
+        short onCalibrationPage = !(((int)(activeWindow) - 4) % 5) && !onMainMenus;     // Determines if on a calibration page
+        short doneWithResSet = (((int)((*channels[0]).rstat) + (int)((*channels[1]).rstat) + (int)((*channels[2]).rstat) + (int)((*channels[3]).rstat)) >= 1000);
+
+        // If the menu is on a non-updating channel item window, do not update the menu. 
+        if (!onCalibrationPage && (onMainMenus || !doneWithResSet)) {
+          update_Scroll_Menu(dirRE);
+          print_Scroll_Menu();
+        }
+      }
+    }
+    else {
+      dirRE = TURN_DIR::STOP;
+    }
+    prevCountRE = curCountRE;
+  }
+}
+
+/**
+*       Acts as the interrupt for the Rotary Encoder's push switch
+*/
+void re_SWInterrupt(void) {
+    unsigned long curTimeSW = millis();
+
+    if (curTimeSW - prevTimeSW >= debounceSW) {
+      prevTimeSW = curTimeSW;
+
+      // Update switch counter 
+      prevSWCount = curSWCount;
+      curSWCount ^= 1;
+    }
+}
+
+/* ---------- METHODS FOR STEPPER MOTOR ACTIONS ---------- */
 
 /**
 *   Sets the direction of a Stepper Motor
@@ -248,73 +368,18 @@ void set_Stepper_Motor_Direction(int motorNum, TURN_DIR dir) {
 }
 
 /**
-*     Initializes the Rotary Encoder
+*   Activate a Stepper Motor.
+*   Return a 0 if valid motor, -1 if invalid motor.
 */
-void init_Rotary_Encoder(void) {
+int activate_Stepper_Motor(int motorNum, int numSteps, int stepTime) {
 
-  pinMode(RE_SW, INPUT);
-  attachInterrupt(digitalPinToInterrupt(RE_SW), re_SWInterrupt, RISING);
+  if (motorNum > 3 || motorNum < 0) {
+    return -1;
+  }
 
-  ESP32Encoder::useInternalWeakPullResistors = puType::up;
-  re.attachFullQuad(RE_CLK, RE_DT);
-  re.setCount(0);
-  prevCountRE = re.getCount();
-}
-
-/**
-*      Controls the counting and direction detection of the Rotary Encoder
-*/
-void re_Controller(void) {
-    // Obtain the current time
-    unsigned long curTimeRE = millis();
-
-    if (curTimeRE - prevTimeRE >= debounceRE) {
-      prevTimeRE = curTimeRE;
-
-      curCountRE = (int) (re.getCount() / 2);
-
-      // Check to see if the Rotary Encoder has moved.
-      // If it has, determine the direction of rotation.
-      if (curCountRE != prevCountRE) {
-        dirRE = (curCountRE - prevCountRE > 0) ? TURN_DIR::CCW : TURN_DIR::CW;
-
-        // Determine if the Rotary Encoder has moved enough to warrant menu scrolling
-        if (curCountRE % RE_SCROLL_COUNT == 0 && menuOn == 1) {
-
-
-        // If menu is on a channel item window, perform that window's action
-        if ((int)(activeWindow) - 5 >= 0) {
-          perform_Menu_Action(dirRE);
-        } 
-
-          update_Scroll_Menu(dirRE);
-          print_Scroll_Menu();
-        }
-      }
-      else {
-        dirRE = TURN_DIR::STOP;
-      }
-      
-
-
-      prevCountRE = curCountRE;
-    }
-
-}
-
-/**
-*       Acts as the interrupt for the Rotary Encoder's push switch
-*/
-void re_SWInterrupt(void) {
-    unsigned long curTimeSW = millis();
-
-    if (curTimeSW - prevTimeSW >= debounceSW) {
-      prevTimeSW = curTimeSW;
-
-      // Update switch counter 
-      prevSWCount = curSWCount;
-      curSWCount ^= 1;
-    }
+  steppers.start_finite(motorNum, stepTime, numSteps);
+  activeMotors[motorNum] = 1;
+  return 0;
 }
 
 /**
@@ -331,13 +396,128 @@ int get_Active_Motor(void) {
   return -1; 
 }
 
+
+
+/* ---------- METHODS FOR MENU DISPLAY, CONFIGURATION, & NAVIGATION  ---------- */
+
 /**
-*     Initiallizes the LCD Screen and Menu
+*     Perform channel menu item window action.
 */
-void init_LCD_Menu(void) {
-  tft.init();
-  tft.setRotation(2);
-  print_Scroll_Menu();
+void perform_Menu_Action(TURN_DIR dir) {
+
+  switch(activeWindow) {
+    /* CHANNEL 1 MENU ITEM WINDOWS*/
+    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
+      
+      set_Channel_Dosage(1);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
+
+      set_Channel_Infusion_Rate(1);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
+      
+      set_Syringe_Start_Rate(1);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
+      
+      set_Syringe_End_Rate(1);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
+      if (steppers.is_finished(1 - 1)) {
+        calibrate_Stepper(1 - 1);
+        calibrating = 1; 
+      }
+      break;
+
+    /* CHANNEL 2 MENU ITEM WINDOWS*/
+    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
+
+      set_Channel_Dosage(2);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
+
+      set_Channel_Infusion_Rate(2);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
+      
+      set_Syringe_Start_Rate(2);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
+      
+      set_Syringe_End_Rate(2);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
+      if (steppers.is_finished(2 - 1)) {
+        calibrate_Stepper(2 - 1);
+        calibrating = 2;
+      }
+      break;
+
+    /* CHANNEL 3 MENU ITEM WINDOWS*/
+    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
+
+      set_Channel_Dosage(3);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
+
+      set_Channel_Infusion_Rate(3);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
+      
+      set_Syringe_Start_Rate(3);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
+      
+      set_Syringe_End_Rate(3);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
+      if (steppers.is_finished(3 - 1)) {
+        calibrate_Stepper(3 - 1);
+        calibrating = 3;
+      }
+      break;
+
+    /* CHANNEL 4 MENU ITEM WINDOWS*/
+    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
+
+      set_Channel_Dosage(4);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
+
+      set_Channel_Infusion_Rate(4);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
+      
+      set_Syringe_Start_Rate(4);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
+      
+      set_Syringe_End_Rate(4);
+      break;
+
+    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
+      if (steppers.is_finished(4 - 1)) {
+        calibrate_Stepper(4 - 1);
+        calibrating = 4;
+      }
+      break;
+  }
 }
 
 /**
@@ -362,7 +542,7 @@ void update_Scroll_Menu(TURN_DIR dir) {
       break; // End update from Channel 1
 
     case ACTIVE_MENU_WINDOW::CHANNEL2:
-      activeItemInt -= 10;   // Set Channel 1's start to 0
+      activeItemInt -= 10;   // Set Channel 2's start to 0
       if (dir == TURN_DIR::CW) {
         activeItemInt++;
         activeItemInt %= 6;
@@ -375,7 +555,7 @@ void update_Scroll_Menu(TURN_DIR dir) {
       break; // End update from Channel 2
 
     case ACTIVE_MENU_WINDOW::CHANNEL3:
-      activeItemInt -= 16;   // Set Channel 1's start to 0
+      activeItemInt -= 16;   // Set Channel 3's start to 0
       if (dir == TURN_DIR::CW) {
         activeItemInt++;
         activeItemInt %= 6;
@@ -388,7 +568,7 @@ void update_Scroll_Menu(TURN_DIR dir) {
       break; // End update from Channel 3
 
     case ACTIVE_MENU_WINDOW::CHANNEL4:
-      activeItemInt -= 24;   // Set Channel 1's start to 0
+      activeItemInt -= 22;   // Set Channel 4's start to 0
       if (dir == TURN_DIR::CW) {
         activeItemInt++;
         activeItemInt %= 6;
@@ -397,7 +577,7 @@ void update_Scroll_Menu(TURN_DIR dir) {
         activeItemInt--;
         activeItemInt = (activeItemInt < 0) ? activeItemInt + 6 : activeItemInt;
       }
-      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + 24);
+      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + 22);
       break; // End update from Channel 4
 
     default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
@@ -541,23 +721,51 @@ void switch_Scroll_Menu(void) {
     
     /* CHANNEL 1 MENU ITEM WINDOWS*/
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-      activeItem = ACTIVE_MENU_ITEM::C1_I1;
+      // Return to main channel page if done setting dosage.
+      if (!((int)((*channels[0]).rstat) % 1000)) {
+        (*channels[0]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+        activeItem = ACTIVE_MENU_ITEM::C1_I1;
+      }
+      else {
+        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+      }
       break; 
 
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-      activeItem = ACTIVE_MENU_ITEM::C1_I2;
+      // Return to main channel page if done setting infusion rate.
+      if (!((int)((*channels[0]).rstat) % 1000)) {
+        (*channels[0]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+        activeItem = ACTIVE_MENU_ITEM::C1_I2;
+      }
+      else {
+        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-      activeItem = ACTIVE_MENU_ITEM::C1_I3;
+      // Return to main channel page if done setting syringe start.
+      if (!((int)((*channels[0]).rstat) % 1000)) {
+        (*channels[0]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+        activeItem = ACTIVE_MENU_ITEM::C1_I3;
+      }
+      else {
+        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-      activeItem = ACTIVE_MENU_ITEM::C1_I4;
+      // Return to main channel page if done setting syringe end.
+      if (!((int)((*channels[0]).rstat) % 1000)) {
+        (*channels[0]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+        activeItem = ACTIVE_MENU_ITEM::C1_I4;
+      }
+      else {
+        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
@@ -567,23 +775,51 @@ void switch_Scroll_Menu(void) {
 
     /* CHANNEL 2 MENU ITEM WINDOWS*/
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-      activeItem = ACTIVE_MENU_ITEM::C2_I1;
+      // Return to main channel page if done setting dosage.
+      if (!((int)((*channels[1]).rstat) % 1000)) {
+        (*channels[1]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+        activeItem = ACTIVE_MENU_ITEM::C2_I1;
+      }
+      else {
+        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-      activeItem = ACTIVE_MENU_ITEM::C2_I2;
+      // Return to main channel page if done setting infusion rate.
+      if (!((int)((*channels[1]).rstat) % 1000)) {
+        (*channels[1]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+        activeItem = ACTIVE_MENU_ITEM::C2_I2;
+      }
+      else {
+        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-      activeItem = ACTIVE_MENU_ITEM::C2_I3;
+      // Return to main channel page if done setting syringe start.
+      if (!((int)((*channels[1]).rstat) % 1000)) {
+        (*channels[1]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+        activeItem = ACTIVE_MENU_ITEM::C2_I3;
+      }
+      else {
+        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-      activeItem = ACTIVE_MENU_ITEM::C2_I4;
+      // Return to main channel page if done setting syringe end.
+      if (!((int)((*channels[1]).rstat) % 1000)) {
+        (*channels[1]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+        activeItem = ACTIVE_MENU_ITEM::C2_I4;
+      }
+      else {
+        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
@@ -593,23 +829,51 @@ void switch_Scroll_Menu(void) {
     
     /* CHANNEL 3 MENU ITEM WINDOWS*/
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-      activeItem = ACTIVE_MENU_ITEM::C3_I1;
+      // Return to main channel page if done setting dosage.
+      if (!((int)((*channels[2]).rstat) % 1000)) {
+        (*channels[2]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+        activeItem = ACTIVE_MENU_ITEM::C3_I1;
+      }
+      else {
+        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-      activeItem = ACTIVE_MENU_ITEM::C3_I2;
+      // Return to main channel page if done setting infusion rate.
+      if (!((int)((*channels[2]).rstat) % 1000)) {
+        (*channels[2]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+        activeItem = ACTIVE_MENU_ITEM::C3_I2;
+      }
+      else {
+        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-      activeItem = ACTIVE_MENU_ITEM::C3_I3;
+      // Return to main channel page if done setting syringe start.
+      if (!((int)((*channels[2]).rstat) % 1000)) {
+        (*channels[2]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+        activeItem = ACTIVE_MENU_ITEM::C3_I3;
+      }
+      else {
+        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-      activeItem = ACTIVE_MENU_ITEM::C3_I4;
+      // Return to main channel page if done setting syringe end.
+      if (!((int)((*channels[2]).rstat) % 1000)) {
+        (*channels[2]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+        activeItem = ACTIVE_MENU_ITEM::C3_I4;
+      }
+      else {
+        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
@@ -619,23 +883,51 @@ void switch_Scroll_Menu(void) {
 
     /* CHANNEL 4 MENU ITEM WINDOWS*/
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-      activeItem = ACTIVE_MENU_ITEM::C4_I1;
+      // Return to main channel page if done setting dosage.
+      if (!((int)((*channels[3]).rstat) % 1000)) {
+        (*channels[3]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+        activeItem = ACTIVE_MENU_ITEM::C4_I1;
+      }
+      else {
+        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-      activeItem = ACTIVE_MENU_ITEM::C4_I2;
+      // Return to main channel page if done setting infusion rate.
+      if (!((int)((*channels[3]).rstat) % 1000)) {
+        (*channels[3]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+        activeItem = ACTIVE_MENU_ITEM::C4_I2;
+      }
+      else {
+        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-      activeItem = ACTIVE_MENU_ITEM::C4_I3;
+      // Return to main channel page if done setting syringe start.
+      if (!((int)((*channels[3]).rstat) % 1000)) {
+        (*channels[3]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+        activeItem = ACTIVE_MENU_ITEM::C4_I3;
+      }
+      else {
+        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-      activeItem = ACTIVE_MENU_ITEM::C4_I4;
+      // Return to main channel page if done setting syringe end.
+      if (!((int)((*channels[3]).rstat) % 1000)) {
+        (*channels[3]).rstat = RES_STATUS::ONES;
+        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+        activeItem = ACTIVE_MENU_ITEM::C4_I4;
+      }
+      else {
+        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+      }
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
@@ -783,7 +1075,7 @@ void print_Scroll_Menu(void) {
     case ACTIVE_MENU_WINDOW::CHANNEL4:
 
       // Find the location of the item in the menu matrix
-      activeItemLoopIndex = (int)(activeItem) - 24 + 4;
+      activeItemLoopIndex = (int)(activeItem) - 22 + 4;
 
       // Print menu header
       print_Menu_Header(4, 0, 0);
@@ -824,12 +1116,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(1, 2, 1);
 
+      // Print item information
+      print_Channel_Infusion_Rate(1);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
 
       // Print menu header
       print_Menu_Header(1, 3, 1);
+
+      //Print item information
+      print_Syringe_Start_Rate(1);
 
       break;
 
@@ -838,6 +1136,9 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(1, 4, 1);
       
+      // Print item information
+      print_Syringe_End_Rate(1);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
@@ -845,6 +1146,9 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(1, 5, 1);
      
+      // Print item information
+      print_Channel_Calibrate(1);
+
       break;
 
     /* CHANNEL 2 MENU ITEM WINDOWS*/
@@ -863,12 +1167,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(2, 2, 1);
 
+      // Print item information
+      print_Channel_Infusion_Rate(2);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
 
       // Print menu header
       print_Menu_Header(2, 3, 1);
+
+      //Print item information
+      print_Syringe_Start_Rate(2);
 
       break;
 
@@ -877,12 +1187,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(2, 4, 1);
 
+      // Print item information
+      print_Syringe_End_Rate(2);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
 
       // Print menu header
       print_Menu_Header(2, 5, 1);
+
+      // Print item information
+      print_Channel_Calibrate(2);
 
       break;
     
@@ -902,12 +1218,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(3, 2, 1);
 
+      // Print item information
+      print_Channel_Infusion_Rate(3);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
 
       // Print menu header
       print_Menu_Header(3, 3, 1);
+
+      //Print item information
+      print_Syringe_Start_Rate(3);
 
       break;
 
@@ -916,12 +1238,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(3, 4, 1);
 
+      // Print item information
+      print_Syringe_End_Rate(3);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
 
       // Print menu header
       print_Menu_Header(3, 5, 1);
+
+      // Print item information
+      print_Channel_Calibrate(3);
 
       break;
 
@@ -941,12 +1269,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(4, 2, 1);
 
+      // Print item information
+      print_Channel_Infusion_Rate(4);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
 
       // Print menu header
       print_Menu_Header(4, 3, 1);
+
+      //Print item information
+      print_Syringe_Start_Rate(4);
 
       break;
 
@@ -955,12 +1289,18 @@ void print_Scroll_Menu(void) {
       // Print menu header
       print_Menu_Header(4, 4, 1);
 
+      // Print item information
+      print_Syringe_End_Rate(4);
+
       break;
 
     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
 
       // Print menu header
       print_Menu_Header(4, 5, 1);
+
+      // Print item information
+      print_Channel_Calibrate(4);
 
       break;
     /* DEFAULT/MAIN MENU WINDOW*/
@@ -994,7 +1334,7 @@ void print_Scroll_Menu(void) {
 }
 
 /*
-*   Prints the proper menu header
+*     Prints the proper menu header
 */
 void print_Menu_Header(int channelNum, int itemNum, short subheader) {
 
@@ -1008,6 +1348,154 @@ void print_Menu_Header(int channelNum, int itemNum, short subheader) {
       tft.setTextSize(3);
 }
 
+/* ---------- METHODS FOR PUMP CHANNEL PARAMETER RESOLUTION DISPLAY & CONFIGURATION---------- */
+
+/**
+*     Sets the proper parameter resolution setting.
+*
+*     Returns -1 if the resolution exceeded the lower bound.
+*     Returns 1 if the resolution exceeded the upper bound.
+*     Returns 0 if no bound has been exceeded.
+*/
+short set_Resolution_Setting(RES_STATUS channelRes, double *param, double lower, double upper) {
+
+  // Determine which digit will be manipulated
+  float mult = (1.0 / (int)(channelRes));
+
+  // Update dosage depending on scroll
+  if (dirRE == TURN_DIR::CW) {
+    (*param) += mult;
+    if ((upper >= 0) && (*param) > upper) {
+      (*param) = upper;
+      return 1;
+    }
+  } 
+  else if (dirRE == TURN_DIR::CCW) {
+    (*param) -= mult;
+    if ((*param) < lower) {
+      (*param) = lower;
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/**
+*     Prints the proper parameter resolution setting
+*/
+void print_Resolution_Setting(RES_STATUS channelRes, String name, double param, String units, String preSpace, double outOfBounds[2]) {
+
+    RES_STATUS print_res = RES_STATUS::ONES;
+    String resStr = String(param);
+
+  if (channelRes % 1000) {
+    tft.print(preSpace);
+    for (int i = 0; resStr[i] != '\0'; i++) {
+      if (resStr[i] == '.') {
+        print_res = (RES_STATUS)((int)print_res * 10);
+        tft.print(resStr[i]);
+      }
+      else if (print_res == channelRes) {
+        tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+        tft.print(resStr[i]);
+        tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+      }
+      else {
+        tft.print(resStr[i]);
+      }
+
+      if (resStr[i - 1] == '.') {
+        print_res = (RES_STATUS)((int)print_res * 10);
+      }
+    }
+    tft.print(" " + units + "\n");
+
+    tft.setTextSize(2);
+    switch(channelRes) {
+      case RES_STATUS::ONES:
+        tft.println("   Editing Ones Place");
+        break;
+      case RES_STATUS::TENTHS:
+        tft.println("  Editing Tenths Place");
+        break;
+      default:
+        tft.println(" Editing Hundreths Place");
+        break;
+    } 
+    tft.setTextSize(4);
+    tft.println("-------------");
+    tft.setTextSize(2);
+    tft.println("Scroll to Adjust");
+    switch(channelRes) {
+      case RES_STATUS::ONES:
+        tft.println("Click to Tenths");
+        break;
+      case RES_STATUS::TENTHS:
+        tft.println("Click to Hundreths");
+        break;
+      default:
+        tft.println("Click to Finish");
+        break;
+    }
+    
+    // If there is an outOfBounds flag pointer, print accordingly
+    if (outOfBounds[0]) {
+      if (outOfBounds[0] > 0) {
+        tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        tft.println("Cannot exceed upper\n bound of " + String(outOfBounds[1]));
+        tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+      }
+      else if (outOfBounds[0] < 0) {
+        tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        tft.println("Cannot exceed lower\n bound of " + String(outOfBounds[1]));
+        tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+      }
+    }
+
+    tft.setTextSize(3); 
+  }
+  else {
+    tft.println("New " + name + " Set:");
+    tft.println(preSpace + "" + String(param) + " " + units + "\n");
+    tft.setTextSize(4);
+    tft.println("-------------");
+    tft.setTextSize(3);
+    tft.println("Click to Exit");
+  }
+}
+
+/**
+*     Resets the resolution codes of a pump channel.
+*
+*     Used after error is printed.
+*/
+void reset_Resolution_Codes(Pump_Channel *channel) {
+
+  // Reset the resolutions codes
+  (*channel).resolutionCodes[0] = 0;
+  (*channel).resolutionCodes[1] = 0;
+}
+
+/* ---------- METHODS FOR PUMP CHANNEL DOSAGE DISPLAY & CONFIGURATION---------- */
+
+/**
+*   Update the channel's dosage amount
+*/
+void set_Channel_Dosage(int channelNum) {
+      
+  // Retrieve correct pump
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  (*channel).resolutionCodes[0] = set_Resolution_Setting((*channel).rstat, &(*channel).dosage, 0, -1);
+
+  if ((*channel).resolutionCodes[0] > 0)        // Upper
+    (*channel).resolutionCodes[1] = -1;
+  else if ((*channel).resolutionCodes[0] < 0)   // Lower
+    (*channel).resolutionCodes[1] = 0;
+  else                                      // No exceed
+    (*channel).resolutionCodes[1] = 0;
+}
+
 /**
 *   Print the proper channel dosage 
 */
@@ -1016,113 +1504,107 @@ void print_Channel_Dosage(int channelNum) {
   // Retrieve pump structure
   Pump_Channel *channel = channels[channelNum - 1];
 
-  tft.println("  " + String((*channel).dosage) + " mg/kg");
-  tft.setTextSize(4);
-  tft.println("-------------");
-  tft.setTextSize(3);
-  tft.println("Scroll to Adjust");
-  tft.println("");
-  tft.println("Click to Exit");
+  print_Resolution_Setting((*channel).rstat, "Dosage", (*channel).dosage, "mg/kg", "  ", (*channel).resolutionCodes);
+  reset_Resolution_Codes(channel);
+}
 
+/* ---------- METHODS FOR PUMP CHANNEL INFUSION RATE DISPLAY & CONFIGURATION ---------- */
+
+/**
+*     Update the channel's infusion rate.
+*/
+void set_Channel_Infusion_Rate(int channelNum) {
+
+  // Retrieve correct pump
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  (*channel).resolutionCodes[0] = set_Resolution_Setting((*channel).rstat, &(*channel).infusionRate, 0, -1);
+
+  if ((*channel).resolutionCodes[0] > 0)        // Upper
+    (*channel).resolutionCodes[1] = -1;
+  else if ((*channel).resolutionCodes[0] < 0)   // Lower
+    (*channel).resolutionCodes[1] = 0;
+  else                                      // No exceed
+    (*channel).resolutionCodes[1] = 0;
 }
 
 /**
-*     Perform channel menu item window action.
+*     Print the proper channel infusion rate
 */
-void perform_Menu_Action(TURN_DIR dir) {
+void print_Channel_Infusion_Rate(int channelNum) {
 
-  Pump_Channel *channel;
+  // Retrieve pump structure
+  Pump_Channel *channel = channels[channelNum - 1];
 
-  switch(activeWindow) {
-    /* CHANNEL 1 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
-      
-      set_Channel_Dosage(1 - 1);
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
-      if (steppers.is_finished(1 - 1)) {
-        calibrate_Stepper(1 - 1);
-        calibrating = 1; 
-      }
-      break;
-
-    /* CHANNEL 2 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
-
-      set_Channel_Dosage(2 - 1);
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
-      if (steppers.is_finished(2 - 1)) {
-        calibrate_Stepper(2 - 1);
-        calibrating = 2;
-      }
-      break;
-
-    /* CHANNEL 3 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
-
-      set_Channel_Dosage(3 - 1);
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
-      if (steppers.is_finished(3 - 1)) {
-        calibrate_Stepper(3 - 1);
-        calibrating = 3;
-      }
-      break;
-
-    /* CHANNEL 4 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
-
-      set_Channel_Dosage(4 - 1);
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
-      if (steppers.is_finished(4 - 1)) {
-        calibrate_Stepper(4 - 1);
-        calibrating = 4;
-      }
-      break;
-  }
+  print_Resolution_Setting((*channel).rstat, "Rate", (*channel).infusionRate, "mg/kg/hr", " ", (*channel).resolutionCodes);
+  reset_Resolution_Codes(channel);
 }
+
+/* ---------- METHODS FOR PUMP CHANNEL SYRINGE START DISPLAY & CONFIGURATION---------- */
+
+/**
+*     Update the channel's infusion rate.
+*/
+void set_Syringe_Start_Rate(int channelNum) {
+
+  // Retrieve correct pump
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  (*channel).resolutionCodes[0] = set_Resolution_Setting((*channel).rstat, &(*channel).syringeStart, (*channel).syringeEnd, -1);
+
+  if ((*channel).resolutionCodes[0] > 0)        // Upper
+    (*channel).resolutionCodes[1] = -1;
+  else if ((*channel).resolutionCodes[0] < 0)   // Lower
+    (*channel).resolutionCodes[1] = (*channel).syringeEnd;
+  else                                      // No exceed
+    (*channel).resolutionCodes[1] = 0;
+}
+
+/**
+*     Print the proper channel infusion rate
+*/
+void print_Syringe_Start_Rate(int channelNum) {
+
+  // Retrieve pump structure
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  print_Resolution_Setting((*channel).rstat, "Start", (*channel).syringeStart, "cm", "  ", (*channel).resolutionCodes);
+  reset_Resolution_Codes(channel);
+}
+
+/* ---------- METHODS FOR PUMP CHANNEL SYRINGE END & CONFIGURATION---------- */
+
+/**
+*     Update the channel's infusion rate.
+*/
+void set_Syringe_End_Rate(int channelNum) {
+
+  // Retrieve correct pump
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  (*channel).resolutionCodes[0] = set_Resolution_Setting((*channel).rstat, &(*channel).syringeEnd, 0, (*channel).syringeStart);
+
+  if ((*channel).resolutionCodes[0] > 0)        // Upper
+    (*channel).resolutionCodes[1] = (*channel).syringeEnd;
+  else if ((*channel).resolutionCodes[0] < 0)   // Lower
+    (*channel).resolutionCodes[1] = 0;
+  else                                      // No exceed
+    (*channel).resolutionCodes[1] = 0;
+}
+
+/**
+*     Print the proper channel infusion rate
+*/
+void print_Syringe_End_Rate(int channelNum) {
+
+  // Retrieve pump structure
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  print_Resolution_Setting((*channel).rstat, "End", (*channel).syringeEnd, "cm", "   ", (*channel).resolutionCodes);
+  reset_Resolution_Codes(channel);
+}
+
+/* ---------- METHODS FOR PUMP CHANNEL CALIBRATION DISPLAY & CONFIGURATION ---------- */
 
 /**
 *   Use the Rotary Encoder to manually move a selected Stepper Motor
@@ -1150,35 +1632,18 @@ void calibrate_Stepper(int motorNum) {
 }
 
 /**
-*   Activate a Stepper Motor.
-*   Return a 0 if valid motor, -1 if invalid motor.
+*    Print the calibration instructions.
 */
-int activate_Stepper_Motor(int motorNum, int numSteps, int stepTime) {
+void print_Channel_Calibrate(int channelNum) {
 
-  if (motorNum > 3 || motorNum < 0) {
-    return -1;
-  }
-
-  steppers.start_finite(motorNum, stepTime, numSteps);
-  activeMotors[motorNum] = 1;
-  return 0;
+  tft.println("CW -> Push");
+  tft.println("CCW -> Pull");
+  tft.setTextSize(4);
+  tft.println("-------------");
+  tft.setTextSize(3);
+  tft.println("Scroll to Adjust");
+  tft.println("");
+  tft.println("Click to Exit");
 }
 
-/**
-*   Update the channel's dosage amount
-*/
-void set_Channel_Dosage(int channelNum) {
-      
-      // Retrieve correct pump
-      channel = channels[channelNum - 1];
 
-      // Update dosage depending on scroll
-      if (dir == TURN_DIR::CW) {
-        (*channel).dosage = (*channel).dosage + 0.05;
-      } 
-      else if (dir == TURN_DIR::CCW) {
-        (*channel).dosage = (*channel).dosage - 0.05;
-        if ((*channel).dosage < 0)
-          (*channel).dosage = 0;
-      }
-}
