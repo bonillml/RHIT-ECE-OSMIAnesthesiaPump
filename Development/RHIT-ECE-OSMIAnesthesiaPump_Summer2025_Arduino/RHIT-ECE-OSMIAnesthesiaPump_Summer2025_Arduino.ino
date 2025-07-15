@@ -88,7 +88,7 @@ enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display
   CHANNEL3,   // Displays pump channel 3 menu options
   CHANNEL4,   // Displays pump channel 4 menu options
 
-  CHANNEL1_ITEM1,      // Channel 1 Item 1
+  CHANNEL1_ITEM1 = 7,  // Channel 1 Item 1  (SET EQUAL TO num_channel_options)
   CHANNEL1_ITEM2,      // Channel 1 Item 2
   CHANNEL1_ITEM3,      // Channel 1 Item 3
   CHANNEL1_ITEM4,      // Channel 1 Item 4
@@ -119,12 +119,13 @@ enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display
 ACTIVE_MENU_WINDOW activeWindow = ACTIVE_MENU_WINDOW::MAIN;
 
 enum ACTIVE_MENU_ITEM {
+  Main,  // Extra piece for simpler enum calculations
   Channel_1,  // Main Menu Channel 1
   Channel_2,  // Main Menu Channel 2
   Channel_3,  // Main Menu Channel 3
   Channel_4,  // Main Menu Channel 4
 
-  C1_I1,      // Channel 1 Item 1
+  C1_I1 = 7,  // Channel 1 Item 1  (SET EQUAL TO num_channel_options)
   C1_I2,      // Channel 1 Item 2
   C1_I3,      // Channel 1 Item 3
   C1_I4,      // Channel 1 Item 4
@@ -209,15 +210,55 @@ typedef struct PumpChannel {
 Pump_Channel pumpChannel1, pumpChannel2, pumpChannel3, pumpChannel4;
 Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpChannel4};
 
+// Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
+void set_Channel_Item_1(int channelNum) { set_Channel_Dosage(channelNum); }
+void set_Channel_Item_2(int channelNum) { set_Channel_Infusion_Rate(channelNum); }
+void set_Channel_Item_3(int channelNum) { set_Syringe_Start(channelNum); }
+void set_Channel_Item_4(int channelNum) { set_Syringe_End(channelNum); }
+void set_Channel_Item_5(int channelNum) { if (steppers.is_finished(channelNum - 1)) calibrate_Stepper(1 - 1); }
+void set_Channel_Item_6(int channelNum) { set_Start_Stop(channelNum); }
+
+void (*set_funcs[6])(int) = {set_Channel_Item_1, set_Channel_Item_2, set_Channel_Item_3, set_Channel_Item_4, set_Channel_Item_5, set_Channel_Item_6};
+
+// Setup an array of pointers to various printing functions. Allows quick and structured access to printing methods.
+void print_Channel_Item_1(int channelNum) { print_Channel_Dosage(channelNum); }
+void print_Channel_Item_2(int channelNum) { print_Channel_Infusion_Rate(channelNum); }
+void print_Channel_Item_3(int channelNum) { print_Syringe_Start(channelNum); }
+void print_Channel_Item_4(int channelNum) { print_Syringe_End(channelNum); }
+void print_Channel_Item_5(int channelNum) { print_Channel_Calibrate(channelNum); }
+void print_Channel_Item_6(int channelNum) { print_Start_Stop(channelNum); }
+
+void (*print_funcs[6])(int) = {print_Channel_Item_1, print_Channel_Item_2, print_Channel_Item_3, print_Channel_Item_4, print_Channel_Item_5, print_Channel_Item_6};
+
+// Declare RTOS timer
+TimerHandle_t motorTimer;
+
+void motorTimerAction(TimerHandle_t xTimer) {
+  steppers_do_tasks();
+}
+
 void setup() {
+  // Allow the correct Serial Baud Rate
+  Serial.begin(115200);
+
   // Initializes all four Stepper Motors.
   init_Stepper_Motors();
   init_Rotary_Encoder();
   init_LCD_Menu();
 
-  // Allow the correct Serial Baud Rate
-  Serial.begin(115200);
+  motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(5), pdTRUE, 0, motorTimerAction);
+
+  if (motorTimer) {
+    Serial.println("RTOS Timer Initialized");
+    xTimerStart(motorTimer, 0);
+  }
+  else
+    Serial.println("RTOS Timer Failed to Initialize");
+
   Serial.print("Booting Firmware on Core: " + String(xPortGetCoreID()) + "\n");
+
+  Serial.println("Window: " + String(activeWindow));
+  Serial.println("Item: " + String(activeItem));
 }
 
 void loop() {
@@ -228,14 +269,16 @@ void loop() {
   if (curSWCount != prevSWCount) {
     
     // Update the menu if the menu is active
-    if (menuOn) 
-      switch_Scroll_Menu();
-
+    if (menuOn) {
+      switch_Scroll_Menu_Optimized();
+      Serial.println("Window: " + String(activeWindow));
+      Serial.println("Item: " + String(activeItem));
+    }
     // Update switch counter
     prevSWCount = curSWCount;
   }
 
-  steppers_do_tasks();
+  //steppers_do_tasks();    // Attempt with Timer Interrupts
   // Check to see if Rotary Encoder performed actions
   re_Controller();
 
@@ -300,7 +343,7 @@ void init_Rotary_Encoder(void) {
 void init_LCD_Menu(void) {
   tft.init();
   tft.setRotation(2);
-  print_Scroll_Menu();
+  print_Scroll_Menu_Optimized();
 }
 
 /* ---------- METHODS FOR PUMP CHANNEL INFORMATION ---------- */
@@ -312,7 +355,8 @@ void update_Channel_Status(int channelNum) {
   Pump_Channel *channel = channels[channelNum - 1];
 
   // Determine if the channel is calibrating or running
-  if (steppers.is_running(channelNum - 1)) {
+  // TODO: Test if removing libray-dependent condition works
+  if ((steppers.is_running(channelNum - 1))) {
     
     if ((*channel).pstat == PUMP_STATUS::CALIBRATE)
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
@@ -323,16 +367,22 @@ void update_Channel_Status(int channelNum) {
   }
 
   // Set status as paused
+  // TODO: Test if removing libray-dependent condition works
   if (steppers.is_paused(channelNum - 1)) {
     (*channel).pstat = PUMP_STATUS::PAUSED;
+
+    
     return;
   }
 
   // Don't do anything if channel is being configured.
-  if ((*channel).pstat == PUMP_STATUS::CONFIG || (*channel).pstat == PUMP_STATUS::IDLE)
+  if ((*channel).pstat == PUMP_STATUS::CONFIG || (*channel).pstat == PUMP_STATUS::IDLE) {
+    
+    
     return;
-
+  }
   // Determine if the channel is idle or complete
+  // TODO: Test if removing libray-dependent condition works
   if (steppers.is_finished(channelNum - 1)) {
 
     if ((*channel).pstat == PUMP_STATUS::RUNNING) {
@@ -341,6 +391,7 @@ void update_Channel_Status(int channelNum) {
     }
     else
       (*channel).pstat = PUMP_STATUS::IDLE;
+    
     
     return;
   }
@@ -418,8 +469,8 @@ void re_Controller(void) {
       if (curCountRE % RE_SCROLL_COUNT == 0 && menuOn == 1) {
 
         // If menu is on a channel item window, perform that window's action
-        if ((int)(activeWindow) - 5 >= 0) {
-          perform_Menu_Action(dirRE);
+        if ((int)(activeWindow) >= num_channel_options) {
+          perform_Menu_Action_Optimized();
         }
 
         // Boolean conditions to reduce menu scrolling/refreshing
@@ -429,8 +480,10 @@ void re_Controller(void) {
 
         // If the menu is on a non-updating channel item window, do not update the menu. 
         if (!onCalibrationPage && (onMainMenus || !doneWithResSet)) {
-          update_Scroll_Menu(dirRE);
-          print_Scroll_Menu();
+          update_Scroll_Menu_Optimized(dirRE);
+          print_Scroll_Menu_Optimized();
+          Serial.println("Window: " + String(activeWindow));
+          Serial.println("Item: " + String(activeItem));
         }
       }
     }
@@ -489,6 +542,8 @@ int activate_Stepper_Motor(int motorNum, int numSteps, int stepTime) {
     return -1;
   }
 
+  // TODO: Test if pausing timer here works
+  
   steppers.start_finite(motorNum, stepTime, numSteps);
 
   // If the motor isn't calibrating, set it as running.
@@ -509,7 +564,7 @@ void steppers_do_tasks(void) {
 
   for (int i = 0; i < 4; i++) {
     
-    if ((remaining_steps = steppers.get_remaining_steps(i)))
+    if ((remaining_steps = steppers.get_remaining_steps(i)) && ((*channels[i]).pstat == PUMP_STATUS::RUNNING || (*channels[i]).pstat == PUMP_STATUS::CALIBRATE))
       (*channels[i]).stepCount = remaining_steps;
   }
 }
@@ -531,669 +586,1159 @@ int get_Active_Motor(void) {
 /* ---------- METHODS FOR MENU DISPLAY, CONFIGURATION, & NAVIGATION  ---------- */
 
 /**
-*     Perform channel menu item window action.
+*     Perform channel menu item window action. ~ Nearly 125 lines of code
+*     
+*     (DEPRECATED)
 */
-void perform_Menu_Action(TURN_DIR dir) {
+// void perform_Menu_Action(TURN_DIR dir) {
 
-  steppers_do_tasks();
-
-  switch(activeWindow) {
-    /* CHANNEL 1 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
+//   switch(activeWindow) {
+//     /* CHANNEL 1 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
       
-      set_Channel_Dosage(1);
-      break;
+//       set_Channel_Dosage(1);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
 
-      set_Channel_Infusion_Rate(1);
-      break;
+//       set_Channel_Infusion_Rate(1);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
       
-      set_Syringe_Start(1);
-      break;
+//       set_Syringe_Start(1);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
       
-      set_Syringe_End(1);
-      break;
+//       set_Syringe_End(1);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
-      if (steppers.is_finished(1 - 1)) {
-        calibrate_Stepper(1 - 1);
-      }
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6:
-      set_Start_Stop(1);
-      break;
-    /* CHANNEL 2 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
+//       // TODO: Test if removing libray-dependent condition works
+//       if (steppers.is_finished(1 - 1)) {
+//         calibrate_Stepper(1 - 1);
+//       }
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6:
+//       set_Start_Stop(1);
+//       break;
+//     /* CHANNEL 2 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
 
-      set_Channel_Dosage(2);
-      break;
+//       set_Channel_Dosage(2);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
 
-      set_Channel_Infusion_Rate(2);
-      break;
+//       set_Channel_Infusion_Rate(2);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
       
-      set_Syringe_Start(2);
-      break;
+//       set_Syringe_Start(2);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
       
-      set_Syringe_End(2);
-      break;
+//       set_Syringe_End(2);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
-      if (steppers.is_finished(2 - 1)) {
-        calibrate_Stepper(2 - 1);
-      }
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6:
-      set_Start_Stop(2);
-      break;
-    /* CHANNEL 3 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
+//       // TODO: Test if removing libray-dependent condition works
+//       if (steppers.is_finished(2 - 1)) {
+//         calibrate_Stepper(2 - 1);
+//       }
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6:
+//       set_Start_Stop(2);
+//       break;
+//     /* CHANNEL 3 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
 
-      set_Channel_Dosage(3);
-      break;
+//       set_Channel_Dosage(3);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
 
-      set_Channel_Infusion_Rate(3);
-      break;
+//       set_Channel_Infusion_Rate(3);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
       
-      set_Syringe_Start(3);
-      break;
+//       set_Syringe_Start(3);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
       
-      set_Syringe_End(3);
-      break;
+//       set_Syringe_End(3);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
-      if (steppers.is_finished(3 - 1)) {
-        calibrate_Stepper(3 - 1);
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
+//       // TODO: Test if removing libray-dependent condition works
+//       if (steppers.is_finished(3 - 1)) {
+//         calibrate_Stepper(3 - 1);
 
-      }
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6:
-      set_Start_Stop(3);
-      break;
-    /* CHANNEL 4 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
+//       }
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6:
+//       set_Start_Stop(3);
+//       break;
+//     /* CHANNEL 4 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
 
-      set_Channel_Dosage(4);
-      break;
+//       set_Channel_Dosage(4);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
 
-      set_Channel_Infusion_Rate(4);
-      break;
+//       set_Channel_Infusion_Rate(4);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
       
-      set_Syringe_Start(4);
-      break;
+//       set_Syringe_Start(4);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
       
-      set_Syringe_End(4);
-      break;
+//       set_Syringe_End(4);
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
-      if (steppers.is_finished(4 - 1)) {
-        calibrate_Stepper(4 - 1);
-      }
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6:
-      set_Start_Stop(4);
-      break;
-  }
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
+//       // TODO: Test if removing libray-dependent condition works
+//       if (steppers.is_finished(4 - 1)) {
+//         calibrate_Stepper(4 - 1);
+//       }
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6:
+//       set_Start_Stop(4);
+//       break;
+//   }
+// }
+
+/**
+*     Perform channel menu item window action. ~ Nearly 10 lines of code
+*     
+*     REQUIRES FOLLOWING ASSUMPTIONS;
+*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
+*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
+*     - All channel items are contiguous in their respective enums.
+*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
+*
+*/
+void perform_Menu_Action_Optimized(void) {
+
+  // Determine the channel # and channel item #.
+  short channelNum = (short)((int)activeWindow / (double)num_channel_options);  // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
+  short channelItemNum = (short)((int)activeWindow % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
+
+  // Check if current window allows function to run
+  if ((int)activeWindow >= num_channel_options)
+    (*set_funcs[channelItemNum])(channelNum);       // Set Item Information
 }
 
 /**
-*     Updates the scroll menu's active item
+*     Updates the scroll menu's active item ~ Nearly 70 lines of code
+*     
+*     (DEPRECATED)
 */
-void update_Scroll_Menu(TURN_DIR dir) {
+// void update_Scroll_Menu(TURN_DIR dir) {
 
+//   int activeItemInt = activeItem;
+
+//   switch(activeWindow) {
+//     case ACTIVE_MENU_WINDOW::CHANNEL1:
+//       activeItemInt -= (int)(ACTIVE_MENU_ITEM::C1_I1);   // Set Channel 1's start to 0
+//       if (dir == TURN_DIR::CW) {
+//         activeItemInt++;
+//         activeItemInt %= num_channel_options;
+//       }
+//       else if (dir == TURN_DIR::CCW) {
+//         activeItemInt--;
+//         activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
+//       }
+//       activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C1_I1));
+//       break; // End update from Channel 1
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL2:
+//       activeItemInt -= (int)(ACTIVE_MENU_ITEM::C2_I1);   // Set Channel 2's start to 0
+//       if (dir == TURN_DIR::CW) {
+//         activeItemInt++;
+//         activeItemInt %= num_channel_options;
+//       }
+//       else if (dir == TURN_DIR::CCW) {
+//         activeItemInt--;
+//         activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
+//       }
+//       activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C2_I1));
+//       break; // End update from Channel 2
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL3:
+//       activeItemInt -= (int)(ACTIVE_MENU_ITEM::C3_I1);   // Set Channel 3's start to 0
+//       if (dir == TURN_DIR::CW) {
+//         activeItemInt++;
+//         activeItemInt %= num_channel_options;
+//       }
+//       else if (dir == TURN_DIR::CCW) {
+//         activeItemInt--;
+//         activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
+//       }
+//       activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C3_I1));
+//       break; // End update from Channel 3
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL4:
+//       activeItemInt -= (int)(ACTIVE_MENU_ITEM::C4_I1);   // Set Channel 4's start to 0
+//       if (dir == TURN_DIR::CW) {
+//         activeItemInt++;
+//         activeItemInt %= num_channel_options;
+//       }
+//       else if (dir == TURN_DIR::CCW) {
+//         activeItemInt--;
+//         activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
+//       }
+//       activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C4_I1));
+//       break; // End update from Channel 4
+
+//     default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
+//       if (dir == TURN_DIR::CW) {
+//         activeItemInt++;
+//         activeItemInt %= 4;
+//       }
+//       else if (dir == TURN_DIR::CCW) {
+//         activeItemInt--;
+//         activeItemInt = (activeItemInt < 0) ? activeItemInt + 4 : activeItemInt;
+//       }
+//       activeItem = (ACTIVE_MENU_ITEM) activeItemInt;
+//       break; // End update from Main Menu
+//   }
+// }
+
+/**
+*     Updates the scroll menu's active item ~ Nearly 40 lines of code
+*     
+*     REQUIRES FOLLOWING ASSUMPTIONS;
+*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
+*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
+*     - All channel items are contiguous in their respective enums.
+*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
+*
+*/
+void update_Scroll_Menu_Optimized(TURN_DIR dir) {
+
+  // Determine the channel # and channel item #.
+  short channelNum = (short)activeWindow;                                     // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
+  short channelItemNum = (short)((int)activeItem % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
+
+  // Define variable to track next highlighted option (Default values for main menu assignment)
   int activeItemInt = activeItem;
-  steppers_do_tasks();
+  short activeItemMod = 4;
 
-  switch(activeWindow) {
-    case ACTIVE_MENU_WINDOW::CHANNEL1:
-      activeItemInt -= (int)(ACTIVE_MENU_ITEM::C1_I1);   // Set Channel 1's start to 0
-      if (dir == TURN_DIR::CW) {
-        activeItemInt++;
-        activeItemInt %= num_channel_options;
-      }
-      else if (dir == TURN_DIR::CCW) {
-        activeItemInt--;
-        activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
-      }
-      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C1_I1));
-      break; // End update from Channel 1
+  // Determine the type of window
+  if (channelNum > 0 && channelNum < 5) {
+    // Channel menu assignment
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2:
-      activeItemInt -= (int)(ACTIVE_MENU_ITEM::C2_I1);   // Set Channel 2's start to 0
-      if (dir == TURN_DIR::CW) {
-        activeItemInt++;
-        activeItemInt %= num_channel_options;
-      }
-      else if (dir == TURN_DIR::CCW) {
-        activeItemInt--;
-        activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
-      }
-      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C2_I1));
-      break; // End update from Channel 2
+    // Reassign activeItemMod
+    activeItemMod = num_channel_options;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3:
-      activeItemInt -= (int)(ACTIVE_MENU_ITEM::C3_I1);   // Set Channel 3's start to 0
-      if (dir == TURN_DIR::CW) {
-        activeItemInt++;
-        activeItemInt %= num_channel_options;
-      }
-      else if (dir == TURN_DIR::CCW) {
-        activeItemInt--;
-        activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
-      }
-      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C3_I1));
-      break; // End update from Channel 3
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4:
-      activeItemInt -= (int)(ACTIVE_MENU_ITEM::C4_I1);   // Set Channel 4's start to 0
-      if (dir == TURN_DIR::CW) {
-        activeItemInt++;
-        activeItemInt %= num_channel_options;
-      }
-      else if (dir == TURN_DIR::CCW) {
-        activeItemInt--;
-        activeItemInt = (activeItemInt < 0) ? activeItemInt + num_channel_options : activeItemInt;
-      }
-      activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + (int)(ACTIVE_MENU_ITEM::C4_I1));
-      break; // End update from Channel 4
-
-    default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
-      if (dir == TURN_DIR::CW) {
-        activeItemInt++;
-        activeItemInt %= 4;
-      }
-      else if (dir == TURN_DIR::CCW) {
-        activeItemInt--;
-        activeItemInt = (activeItemInt < 0) ? activeItemInt + 4 : activeItemInt;
-      }
-      activeItem = (ACTIVE_MENU_ITEM) activeItemInt;
-      break; // End update from Main Menu
+    // Shift the channel item index to 0
+    activeItemInt -= (int)(num_channel_options * channelNum);
   }
+  else if (!activeWindow) {
+    // Main menu assignment 
+    activeItemInt--;
+  }
+  else {
+    // Unexpected case
+    return;
+  }
+
+  if (dir == TURN_DIR::CW) {
+    activeItemInt++;
+    activeItemInt %= activeItemMod;
+  }
+  else if (dir == TURN_DIR::CCW) {
+    activeItemInt--;
+    activeItemInt = (activeItemInt < 0) ? activeItemInt + activeItemMod : activeItemInt;
+  }
+
+  // Cast activeItem back to enumeration
+  activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + ((channelNum) ? (int)(num_channel_options * channelNum) : 1));
 }
 
 /**
-*     Controls the scroll menu's active window
+*     Controls the scroll menu's active window ~ Nearly 450 lines of code
+*     
+*     (DEPRECATED) 
 */
-void switch_Scroll_Menu(void) {
+// void switch_Scroll_Menu(void) {
 
-  steppers_do_tasks();
+//   switch(activeWindow) {
+//     /* CHANNEL MENU WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL1:
 
-  switch(activeWindow) {
-    /* CHANNEL MENU WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL1:
+//       switch(activeItem) {
+//         case ACTIVE_MENU_ITEM::C1_I1:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C1_I2:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C1_I3:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C1_I4:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C1_I5:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C1_I6:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6;
+//             calculate_Motor_Parameters(1);
+//           break;
+//         default: // Also for ACTIVE_MENU_ITEM::C1_MM:
+//             activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+//             activeItem = ACTIVE_MENU_ITEM::Channel_1;
+//           break;
+//       }
 
-      switch(activeItem) {
-        case ACTIVE_MENU_ITEM::C1_I1:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C1_I2:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C1_I3:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C1_I4:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C1_I5:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C1_I6:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6;
-            calculate_Motor_Parameters(1);
-          break;
-        default: // Also for ACTIVE_MENU_ITEM::C1_MM:
-            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
-            activeItem = ACTIVE_MENU_ITEM::Channel_1;
-          break;
-      }
+//       break; // End switch from Channel 1
 
-      break; // End switch from Channel 1
+//     case ACTIVE_MENU_WINDOW::CHANNEL2:
+//       switch(activeItem) {
+//         case ACTIVE_MENU_ITEM::C2_I1:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C2_I2:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C2_I3:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C2_I4:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C2_I5:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C2_I6:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6;
+//             calculate_Motor_Parameters(2); 
+//           break;
+//         default: // Also for ACTIVE_MENU_ITEM::C2_MM:
+//             activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+//             activeItem = ACTIVE_MENU_ITEM::Channel_2;
+//           break;
+//       }
+//       break; // End switch from Channel 2
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2:
-      switch(activeItem) {
-        case ACTIVE_MENU_ITEM::C2_I1:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C2_I2:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C2_I3:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C2_I4:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C2_I5:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C2_I6:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6;
-            calculate_Motor_Parameters(2); 
-          break;
-        default: // Also for ACTIVE_MENU_ITEM::C2_MM:
-            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
-            activeItem = ACTIVE_MENU_ITEM::Channel_2;
-          break;
-      }
-      break; // End switch from Channel 2
+//     case ACTIVE_MENU_WINDOW::CHANNEL3:
+//       switch(activeItem) {
+//         case ACTIVE_MENU_ITEM::C3_I1:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C3_I2:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C3_I3:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C3_I4:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C3_I5:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C3_I6:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6;
+//             calculate_Motor_Parameters(3);
+//           break;
+//         default: // Also for ACTIVE_MENU_ITEM::C3_MM:
+//             activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+//             activeItem = ACTIVE_MENU_ITEM::Channel_3;
+//           break;
+//       }
+//       break; // End switch from Channel 3
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3:
-      switch(activeItem) {
-        case ACTIVE_MENU_ITEM::C3_I1:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C3_I2:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C3_I3:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C3_I4:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C3_I5:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C3_I6:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6;
-            calculate_Motor_Parameters(3);
-          break;
-        default: // Also for ACTIVE_MENU_ITEM::C3_MM:
-            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
-            activeItem = ACTIVE_MENU_ITEM::Channel_3;
-          break;
-      }
-      break; // End switch from Channel 3
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4:
-      switch(activeItem) {
-        case ACTIVE_MENU_ITEM::C4_I1:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C4_I2:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C4_I3:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C4_I4:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C4_I5:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5;
-            //activeItem = 
-          break;
-        case ACTIVE_MENU_ITEM::C4_I6:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6;
-            calculate_Motor_Parameters(4); 
-          break;
-        default: // Also for ACTIVE_MENU_ITEM::C4_MM:
-            activeWindow = ACTIVE_MENU_WINDOW::MAIN;
-            activeItem = ACTIVE_MENU_ITEM::Channel_4;
-          break;
-      }
-      break; // End switch from Channel 4
+//     case ACTIVE_MENU_WINDOW::CHANNEL4:
+//       switch(activeItem) {
+//         case ACTIVE_MENU_ITEM::C4_I1:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C4_I2:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C4_I3:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C4_I4:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C4_I5:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5;
+//             //activeItem = 
+//           break;
+//         case ACTIVE_MENU_ITEM::C4_I6:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6;
+//             calculate_Motor_Parameters(4); 
+//           break;
+//         default: // Also for ACTIVE_MENU_ITEM::C4_MM:
+//             activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+//             activeItem = ACTIVE_MENU_ITEM::Channel_4;
+//           break;
+//       }
+//       break; // End switch from Channel 4
     
-    /* CHANNEL 1 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
-      // Return to main channel page if done setting dosage.
-      if (!((int)((*channels[0]).rstat) % 1000)) {
-        (*channels[0]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-        activeItem = ACTIVE_MENU_ITEM::C1_I1;
-      }
-      else {
-        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
-      }
-      break; 
+//     /* CHANNEL 1 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
+//       // Return to main channel page if done setting dosage.
+//       if (!((int)((*channels[0]).rstat) % 1000)) {
+//         (*channels[0]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//         activeItem = ACTIVE_MENU_ITEM::C1_I1;
+//       }
+//       else {
+//         (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+//       }
+//       break; 
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
-      // Return to main channel page if done setting infusion rate.
-      if (!((int)((*channels[0]).rstat) % 1000)) {
-        (*channels[0]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-        activeItem = ACTIVE_MENU_ITEM::C1_I2;
-      }
-      else {
-        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
+//       // Return to main channel page if done setting infusion rate.
+//       if (!((int)((*channels[0]).rstat) % 1000)) {
+//         (*channels[0]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//         activeItem = ACTIVE_MENU_ITEM::C1_I2;
+//       }
+//       else {
+//         (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
-      // Return to main channel page if done setting syringe start.
-      if (!((int)((*channels[0]).rstat) % 1000)) {
-        (*channels[0]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-        activeItem = ACTIVE_MENU_ITEM::C1_I3;
-      }
-      else {
-        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
+//       // Return to main channel page if done setting syringe start.
+//       if (!((int)((*channels[0]).rstat) % 1000)) {
+//         (*channels[0]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//         activeItem = ACTIVE_MENU_ITEM::C1_I3;
+//       }
+//       else {
+//         (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
-      // Return to main channel page if done setting syringe end.
-      if (!((int)((*channels[0]).rstat) % 1000)) {
-        (*channels[0]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-        activeItem = ACTIVE_MENU_ITEM::C1_I4;
-      }
-      else {
-        (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
+//       // Return to main channel page if done setting syringe end.
+//       if (!((int)((*channels[0]).rstat) % 1000)) {
+//         (*channels[0]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//         activeItem = ACTIVE_MENU_ITEM::C1_I4;
+//       }
+//       else {
+//         (*channels[0]).rstat = (RES_STATUS)((*channels[0]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-      activeItem = ACTIVE_MENU_ITEM::C1_I5;
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6:
-      // Return to main page if clicked on exit
-      if (!startStop) {
-      }
-      else if (steppers.is_running(1 - 1)) {  // startStop = 1 - Stop
-        pause_Start_Stop(1);
-      }
-      else if (steppers.is_paused(1 - 1)) {   // startStop = 1 - Start/Resume
-        resume_Start_Stop(1);
-      }
-      else if (steppers.is_finished(1 - 1)) { // startStop = 1 - Start/Begin
-        begin_Start_Stop(1);
-      }
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-      activeItem = ACTIVE_MENU_ITEM::C1_I6;
-      startStop = 0;
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//       activeItem = ACTIVE_MENU_ITEM::C1_I5;
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6:
+//       // Return to main page if clicked on exit
+//       if (!startStop) {
+//       }
+//       // TODO: Test if removing libray-dependent condition works
+//       else if (steppers.is_running(1 - 1)) {  // startStop = 1 - Stop
+//         pause_Start_Stop(1);
+//       }
+//       else if (steppers.is_paused(1 - 1)) {   // startStop = 1 - Start/Resume
+//         resume_Start_Stop(1);
+//       }
+//       else if (steppers.is_finished(1 - 1)) { // startStop = 1 - Start/Begin
+//         begin_Start_Stop(1);
+//       }
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//       activeItem = ACTIVE_MENU_ITEM::C1_I6;
+//       startStop = 0;
+//       break;
 
-    /* CHANNEL 2 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
-      // Return to main channel page if done setting dosage.
-      if (!((int)((*channels[1]).rstat) % 1000)) {
-        (*channels[1]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-        activeItem = ACTIVE_MENU_ITEM::C2_I1;
-      }
-      else {
-        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
-      }
-      break;
+//     /* CHANNEL 2 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
+//       // Return to main channel page if done setting dosage.
+//       if (!((int)((*channels[1]).rstat) % 1000)) {
+//         (*channels[1]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//         activeItem = ACTIVE_MENU_ITEM::C2_I1;
+//       }
+//       else {
+//         (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
-      // Return to main channel page if done setting infusion rate.
-      if (!((int)((*channels[1]).rstat) % 1000)) {
-        (*channels[1]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-        activeItem = ACTIVE_MENU_ITEM::C2_I2;
-      }
-      else {
-        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
+//       // Return to main channel page if done setting infusion rate.
+//       if (!((int)((*channels[1]).rstat) % 1000)) {
+//         (*channels[1]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//         activeItem = ACTIVE_MENU_ITEM::C2_I2;
+//       }
+//       else {
+//         (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
-      // Return to main channel page if done setting syringe start.
-      if (!((int)((*channels[1]).rstat) % 1000)) {
-        (*channels[1]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-        activeItem = ACTIVE_MENU_ITEM::C2_I3;
-      }
-      else {
-        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
+//       // Return to main channel page if done setting syringe start.
+//       if (!((int)((*channels[1]).rstat) % 1000)) {
+//         (*channels[1]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//         activeItem = ACTIVE_MENU_ITEM::C2_I3;
+//       }
+//       else {
+//         (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
-      // Return to main channel page if done setting syringe end.
-      if (!((int)((*channels[1]).rstat) % 1000)) {
-        (*channels[1]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-        activeItem = ACTIVE_MENU_ITEM::C2_I4;
-      }
-      else {
-        (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
+//       // Return to main channel page if done setting syringe end.
+//       if (!((int)((*channels[1]).rstat) % 1000)) {
+//         (*channels[1]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//         activeItem = ACTIVE_MENU_ITEM::C2_I4;
+//       }
+//       else {
+//         (*channels[1]).rstat = (RES_STATUS)((*channels[1]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-      activeItem = ACTIVE_MENU_ITEM::C2_I5;
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6:
-      // Return to main page if clicked on exit
-      if (!startStop) {
-      }
-      else if (steppers.is_running(2 - 1)) {
-        pause_Start_Stop(2);
-      }
-      else if (steppers.is_paused(2 - 1)) {
-        resume_Start_Stop(2);
-      }
-      else if (steppers.is_finished(2 - 1)) {
-        begin_Start_Stop(2);
-      }
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-      activeItem = ACTIVE_MENU_ITEM::C2_I6;
-      startStop = 0;
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//       activeItem = ACTIVE_MENU_ITEM::C2_I5;
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6:
+//       // Return to main page if clicked on exit
+//       if (!startStop) {
+//       }
+//       // TODO: Test if removing libray-dependent condition works
+//       else if (steppers.is_running(2 - 1)) {
+//         pause_Start_Stop(2);
+//       }
+//       else if (steppers.is_paused(2 - 1)) {
+//         resume_Start_Stop(2);
+//       }
+//       else if (steppers.is_finished(2 - 1)) {
+//         begin_Start_Stop(2);
+//       }
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//       activeItem = ACTIVE_MENU_ITEM::C2_I6;
+//       startStop = 0;
+//       break;
     
-    /* CHANNEL 3 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
-      // Return to main channel page if done setting dosage.
-      if (!((int)((*channels[2]).rstat) % 1000)) {
-        (*channels[2]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-        activeItem = ACTIVE_MENU_ITEM::C3_I1;
-      }
-      else {
-        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
-      }
-      break;
+//     /* CHANNEL 3 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
+//       // Return to main channel page if done setting dosage.
+//       if (!((int)((*channels[2]).rstat) % 1000)) {
+//         (*channels[2]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//         activeItem = ACTIVE_MENU_ITEM::C3_I1;
+//       }
+//       else {
+//         (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
-      // Return to main channel page if done setting infusion rate.
-      if (!((int)((*channels[2]).rstat) % 1000)) {
-        (*channels[2]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-        activeItem = ACTIVE_MENU_ITEM::C3_I2;
-      }
-      else {
-        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
+//       // Return to main channel page if done setting infusion rate.
+//       if (!((int)((*channels[2]).rstat) % 1000)) {
+//         (*channels[2]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//         activeItem = ACTIVE_MENU_ITEM::C3_I2;
+//       }
+//       else {
+//         (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
-      // Return to main channel page if done setting syringe start.
-      if (!((int)((*channels[2]).rstat) % 1000)) {
-        (*channels[2]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-        activeItem = ACTIVE_MENU_ITEM::C3_I3;
-      }
-      else {
-        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
+//       // Return to main channel page if done setting syringe start.
+//       if (!((int)((*channels[2]).rstat) % 1000)) {
+//         (*channels[2]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//         activeItem = ACTIVE_MENU_ITEM::C3_I3;
+//       }
+//       else {
+//         (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
-      // Return to main channel page if done setting syringe end.
-      if (!((int)((*channels[2]).rstat) % 1000)) {
-        (*channels[2]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-        activeItem = ACTIVE_MENU_ITEM::C3_I4;
-      }
-      else {
-        (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
+//       // Return to main channel page if done setting syringe end.
+//       if (!((int)((*channels[2]).rstat) % 1000)) {
+//         (*channels[2]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//         activeItem = ACTIVE_MENU_ITEM::C3_I4;
+//       }
+//       else {
+//         (*channels[2]).rstat = (RES_STATUS)((*channels[2]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-      activeItem = ACTIVE_MENU_ITEM::C3_I5;
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6:
-      // Return to main page if clicked on exit
-      if (!startStop) {
-      }
-      else if (steppers.is_running(3 - 1)) {
-        pause_Start_Stop(3);
-      }
-      else if (steppers.is_paused(3 - 1)) {
-        resume_Start_Stop(3);
-      }
-      else if (steppers.is_finished(3 - 1)) {
-        begin_Start_Stop(3);
-      }
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-      activeItem = ACTIVE_MENU_ITEM::C3_I6;
-      startStop = 0;
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//       activeItem = ACTIVE_MENU_ITEM::C3_I5;
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6:
+//       // Return to main page if clicked on exit
+//       if (!startStop) {
+//       }
+//       // TODO: Test if removing libray-dependent condition works
+//       else if (steppers.is_running(3 - 1)) {
+//         pause_Start_Stop(3);
+//       }
+//       else if (steppers.is_paused(3 - 1)) {
+//         resume_Start_Stop(3);
+//       }
+//       else if (steppers.is_finished(3 - 1)) {
+//         begin_Start_Stop(3);
+//       }
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//       activeItem = ACTIVE_MENU_ITEM::C3_I6;
+//       startStop = 0;
+//       break;
     
-    /* CHANNEL 4 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
-      // Return to main channel page if done setting dosage.
-      if (!((int)((*channels[3]).rstat) % 1000)) {
-        (*channels[3]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-        activeItem = ACTIVE_MENU_ITEM::C4_I1;
-      }
-      else {
-        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
-      }
-      break;
+//     /* CHANNEL 4 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
+//       // Return to main channel page if done setting dosage.
+//       if (!((int)((*channels[3]).rstat) % 1000)) {
+//         (*channels[3]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//         activeItem = ACTIVE_MENU_ITEM::C4_I1;
+//       }
+//       else {
+//         (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
-      // Return to main channel page if done setting infusion rate.
-      if (!((int)((*channels[3]).rstat) % 1000)) {
-        (*channels[3]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-        activeItem = ACTIVE_MENU_ITEM::C4_I2;
-      }
-      else {
-        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
+//       // Return to main channel page if done setting infusion rate.
+//       if (!((int)((*channels[3]).rstat) % 1000)) {
+//         (*channels[3]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//         activeItem = ACTIVE_MENU_ITEM::C4_I2;
+//       }
+//       else {
+//         (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
-      // Return to main channel page if done setting syringe start.
-      if (!((int)((*channels[3]).rstat) % 1000)) {
-        (*channels[3]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-        activeItem = ACTIVE_MENU_ITEM::C4_I3;
-      }
-      else {
-        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
+//       // Return to main channel page if done setting syringe start.
+//       if (!((int)((*channels[3]).rstat) % 1000)) {
+//         (*channels[3]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//         activeItem = ACTIVE_MENU_ITEM::C4_I3;
+//       }
+//       else {
+//         (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
-      // Return to main channel page if done setting syringe end.
-      if (!((int)((*channels[3]).rstat) % 1000)) {
-        (*channels[3]).rstat = RES_STATUS::ONES;
-        activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-        activeItem = ACTIVE_MENU_ITEM::C4_I4;
-      }
-      else {
-        (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
-      }
-      break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
+//       // Return to main channel page if done setting syringe end.
+//       if (!((int)((*channels[3]).rstat) % 1000)) {
+//         (*channels[3]).rstat = RES_STATUS::ONES;
+//         activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//         activeItem = ACTIVE_MENU_ITEM::C4_I4;
+//       }
+//       else {
+//         (*channels[3]).rstat = (RES_STATUS)((*channels[3]).rstat * 10);
+//       }
+//       break;
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-      activeItem = ACTIVE_MENU_ITEM::C4_I5;
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6:
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//       activeItem = ACTIVE_MENU_ITEM::C4_I5;
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6:
+//       // Return to main page if clicked on exit
+//       if (!startStop) {
+//       }
+//       // TODO: Test if removing libray-dependent condition works
+//       else if (steppers.is_running(4 - 1)) {
+//         pause_Start_Stop(4);
+//       }
+//       else if (steppers.is_paused(4 - 1)) {
+//         resume_Start_Stop(4);
+//       }
+//       else if (steppers.is_finished(4 - 1)) {
+//         begin_Start_Stop(4);
+//       }
+//       activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//       activeItem = ACTIVE_MENU_ITEM::C4_I6;
+//       startStop = 0;
+//       break;
+
+//     /* DEFAULT/MAIN MENU WINDOW*/
+//     default: // Also for ACTIVE_MENU_WINDOW::MAIN:
+
+//       switch(activeItem) {
+//         case ACTIVE_MENU_ITEM::Channel_2:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
+//             activeItem = ACTIVE_MENU_ITEM::C2_I1;
+//           break;
+//         case ACTIVE_MENU_ITEM::Channel_3:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
+//             activeItem = ACTIVE_MENU_ITEM::C3_I1;
+//           break;
+//         case ACTIVE_MENU_ITEM::Channel_4:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
+//             activeItem = ACTIVE_MENU_ITEM::C4_I1;
+//           break;
+//         default: // Also for ACTIVE_MENU_WINDOW::CHANNEL1:
+//             activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
+//             activeItem = ACTIVE_MENU_ITEM::C1_I1;
+//           break;
+//       }
+
+//       break; // End switch from Main Menu
+//   }
+
+//   print_Scroll_Menu_Optimized();
+// }
+
+/**
+*     Controls the scroll menu's active window ~ Nearly 60 lines of code
+*     
+*     REQUIRES FOLLOWING ASSUMPTIONS;
+*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
+*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
+*     - All channel items are contiguous in their respective enums.
+*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
+*
+*/
+void switch_Scroll_Menu_Optimized(void) {
+
+  // Determine the channel # and channel item #.
+  short channelNum = (short)((int)activeItem / (double)num_channel_options);  // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
+  short channelItemNum = (short)((int)activeItem % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
+
+  if ((int)activeWindow < num_channel_options) {
+    // This is a main menu or channel window.
+
+    activeWindow = (ACTIVE_MENU_WINDOW)((channelItemNum == 6) ? 0 : (int)activeItem);
+    activeItem = (ACTIVE_MENU_ITEM)((int)activeItem * ((channelNum) ? 1 : num_channel_options));
+    activeItem = (channelItemNum == 6) ? (ACTIVE_MENU_ITEM)channelNum : activeItem;
+
+    // If the window is the start/stop page, calculate the motor parameters
+    if (channelNum && channelItemNum == 5)
+      calculate_Motor_Parameters(channelNum);
+  }
+  else {
+    // This is a channel item window
+
+    // If the window is the start/stop page, do custom operation
+    if (channelNum && channelItemNum == 5) {
       // Return to main page if clicked on exit
       if (!startStop) {
       }
-      else if (steppers.is_running(4 - 1)) {
-        pause_Start_Stop(4);
+      // TODO: Test if removing libray-dependent condition works
+      else if (steppers.is_running(channelNum - 1)) {  // startStop = 1 - Stop
+        pause_Start_Stop(channelNum);
       }
-      else if (steppers.is_paused(4 - 1)) {
-        resume_Start_Stop(4);
+      else if (steppers.is_paused(channelNum - 1)) {   // startStop = 1 - Start/Resume
+        resume_Start_Stop(channelNum);
       }
-      else if (steppers.is_finished(4 - 1)) {
-        begin_Start_Stop(4);
+      else if (steppers.is_finished(channelNum - 1)) { // startStop = 1 - Start/Begin
+        begin_Start_Stop(channelNum);
       }
-      activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-      activeItem = ACTIVE_MENU_ITEM::C4_I6;
       startStop = 0;
-      break;
+    }
 
-    /* DEFAULT/MAIN MENU WINDOW*/
-    default: // Also for ACTIVE_MENU_WINDOW::MAIN:
+    // Return to main channel page if done setting syringe end.
+    if (channelItemNum < 4 && !((int)((*channels[channelNum - 1]).rstat) % 1000)) {
+      (*channels[channelNum - 1]).rstat = RES_STATUS::ONES;
+    }
+    else if (channelItemNum < 4) {
+      (*channels[channelNum - 1]).rstat = (RES_STATUS)((*channels[channelNum - 1]).rstat * 10);
 
-      switch(activeItem) {
-        case ACTIVE_MENU_ITEM::Channel_2:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL2;
-            activeItem = ACTIVE_MENU_ITEM::C2_I1;
-          break;
-        case ACTIVE_MENU_ITEM::Channel_3:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL3;
-            activeItem = ACTIVE_MENU_ITEM::C3_I1;
-          break;
-        case ACTIVE_MENU_ITEM::Channel_4:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL4;
-            activeItem = ACTIVE_MENU_ITEM::C4_I1;
-          break;
-        default: // Also for ACTIVE_MENU_WINDOW::CHANNEL1:
-            activeWindow = ACTIVE_MENU_WINDOW::CHANNEL1;
-            activeItem = ACTIVE_MENU_ITEM::C1_I1;
-          break;
-      }
+      // Re-print the UI
+      print_Scroll_Menu_Optimized();
+      return;
+    }
 
-      break; // End switch from Main Menu
+    activeWindow = (ACTIVE_MENU_WINDOW)channelNum;
+    activeItem = (ACTIVE_MENU_ITEM)((channelNum * num_channel_options) + channelItemNum);
   }
 
-  print_Scroll_Menu();
+  // Re-print the UI
+  print_Scroll_Menu_Optimized();
 }
 
 /**
-*     Prints the scroll menu
-*     (Currently, only for Serial Monitor)
+*     Prints the scroll menu ~ Nearly 400 lines of code 
+*     
+*     (DEPRECATED) 
 */
-void print_Scroll_Menu(void) {
+// void print_Scroll_Menu(void) {
   
+//   // Fill screen with light grey
+//   tft.fillScreen(TFT_LIGHTGREY);
+
+//   // Set "cursor" at top left corner of display (0,0) and select font 2
+//   // (cursor will move to next line automatically during printing with 'tft.println'
+//   //  or stay on the line is there is room for the text with tft.print)
+//   tft.setCursor(0, 0, 2);
+
+//   // Set the font colour to be white with a black background
+//   tft.setTextColor(TFT_BLACK,TFT_LIGHTGREY);  
+//   // Set text size multiplier to 4
+//   tft.setTextSize(4);
+
+//   // Declare variable to track which menu item is highlighted
+//   int activeItemLoopIndex;
+
+//   // Print respective menu page
+//   switch(activeWindow) { 
+//     /* CHANNEL MENU WINDOWS*/   
+//     case ACTIVE_MENU_WINDOW::CHANNEL1:
+
+//       // Find the location of the item in the menu matrix
+//       activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C1_I1) + 4;
+
+//       // Print menu header
+//       print_Menu_Header(1, 0, 0);
+
+//       //Print menu window
+//       print_Menu_Window(channels[0], activeItemLoopIndex, 4, std::size(menu_l));
+
+//       break; // End print from Channel 1
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL2:
+
+//       // Find the location of the item in the menu matrix
+//       activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C2_I1) + 4;
+
+//       // Print menu header
+//       print_Menu_Header(2, 0, 0);
+
+//       //Print menu window
+//       print_Menu_Window(channels[1], activeItemLoopIndex, 4, std::size(menu_l));
+
+//       break; // End print from Channel 2
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL3:
+
+//       // Find the location of the item in the menu matrix
+//       activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C3_I1) + 4;
+
+//       // Print menu header
+//       print_Menu_Header(3, 0, 0);
+
+//       //Print menu window
+//       print_Menu_Window(channels[2], activeItemLoopIndex, 4, std::size(menu_l));
+
+//       break; // End print from Channel 3
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL4:
+
+//       // Find the location of the item in the menu matrix
+//       activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C4_I1) + 4;
+
+//       // Print menu header
+//       print_Menu_Header(4, 0, 0);
+
+//       //Print menu window
+//       print_Menu_Window(channels[3], activeItemLoopIndex, 4, std::size(menu_l));
+
+//       break; // End print from Channel 4
+    
+//     /* CHANNEL 1 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
+      
+//       // Print menu header
+//       print_Menu_Header(1, 1, 1);
+
+//       // Print item information
+//       print_Channel_Dosage(1);
+      
+//       break; 
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
+
+//       // Print menu header
+//       print_Menu_Header(1, 2, 1);
+
+//       // Print item information
+//       print_Channel_Infusion_Rate(1);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
+
+//       // Print menu header
+//       print_Menu_Header(1, 3, 1);
+
+//       //Print item information
+//       print_Syringe_Start(1);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
+
+//       // Print menu header
+//       print_Menu_Header(1, 4, 1);
+      
+//       // Print item information
+//       print_Syringe_End(1);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
+
+//       // Print menu header
+//       print_Menu_Header(1, 5, 1);
+     
+//       // Print item information
+//       print_Channel_Calibrate(1);
+
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6:
+
+//       // Print menu header
+//       print_Menu_Header(1, 6, 1);
+
+//       // Print item information
+//       print_Start_Stop(1);
+
+//       break;
+
+//     /* CHANNEL 2 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
+
+//       // Print menu header
+//       print_Menu_Header(2, 1, 1);
+
+//       // Print item information
+//       print_Channel_Dosage(2);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
+
+//       // Print menu header
+//       print_Menu_Header(2, 2, 1);
+
+//       // Print item information
+//       print_Channel_Infusion_Rate(2);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
+
+//       // Print menu header
+//       print_Menu_Header(2, 3, 1);
+
+//       //Print item information
+//       print_Syringe_Start(2);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
+
+//       // Print menu header
+//       print_Menu_Header(2, 4, 1);
+
+//       // Print item information
+//       print_Syringe_End(2);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
+
+//       // Print menu header
+//       print_Menu_Header(2, 5, 1);
+
+//       // Print item information
+//       print_Channel_Calibrate(2);
+
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6:
+
+//       // Print menu header
+//       print_Menu_Header(2, 6, 1);
+
+//       // Print item information
+//       print_Start_Stop(2);
+
+//       break;
+
+//     /* CHANNEL 3 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
+
+//       // Print menu header
+//       print_Menu_Header(3, 1, 1);
+
+//       // Print item information
+//       print_Channel_Dosage(3);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
+
+//       // Print menu header
+//       print_Menu_Header(3, 2, 1);
+
+//       // Print item information
+//       print_Channel_Infusion_Rate(3);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
+
+//       // Print menu header
+//       print_Menu_Header(3, 3, 1);
+
+//       //Print item information
+//       print_Syringe_Start(3);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
+
+//       // Print menu header
+//       print_Menu_Header(3, 4, 1);
+
+//       // Print item information
+//       print_Syringe_End(3);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
+
+//       // Print menu header
+//       print_Menu_Header(3, 5, 1);
+
+//       // Print item information
+//       print_Channel_Calibrate(3);
+
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6:
+
+//       // Print menu header
+//       print_Menu_Header(3, 6, 1);
+
+//       // Print item information
+//       print_Start_Stop(3);
+
+//       break;
+
+//     /* CHANNEL 4 MENU ITEM WINDOWS*/
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
+
+//       // Print menu header
+//       print_Menu_Header(4, 1, 1);
+
+//       // Print item information
+//       print_Channel_Dosage(4);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
+
+//       // Print menu header
+//       print_Menu_Header(4, 2, 1);
+
+//       // Print item information
+//       print_Channel_Infusion_Rate(4);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
+
+//       // Print menu header
+//       print_Menu_Header(4, 3, 1);
+
+//       //Print item information
+//       print_Syringe_Start(4);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
+
+//       // Print menu header
+//       print_Menu_Header(4, 4, 1);
+
+//       // Print item information
+//       print_Syringe_End(4);
+
+//       break;
+
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
+
+//       // Print menu header
+//       print_Menu_Header(4, 5, 1);
+
+//       // Print item information
+//       print_Channel_Calibrate(4);
+
+//       break;
+//     case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6:
+
+//       // Print menu header
+//       print_Menu_Header(4, 6, 1);
+
+//       // Print item information
+//       print_Start_Stop(4);
+
+//       break;
+    
+//     /* DEFAULT/MAIN MENU WINDOW*/
+//     default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
+
+//       // Find the location of the item in the menu matrix
+//       activeItemLoopIndex = (int)(activeItem);
+
+//       // Print menu header
+//       print_Menu_Header(0, 0, 0);
+
+//       //Print menu window
+//       print_Menu_Window(0, activeItemLoopIndex, 0, 4);
+
+//       break; // End print from Main Menu
+//   }
+// }
+
+/**
+*     Prints the scroll menu ~ Nearly 60 lines of code
+*     
+*     REQUIRES FOLLOWING ASSUMPTIONS;
+*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
+*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
+*     - All channel items are contiguous in their respective enums.
+*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
+*
+*/
+void print_Scroll_Menu_Optimized(void) {
+
   // Fill screen with light grey
   tft.fillScreen(TFT_LIGHTGREY);
 
@@ -1207,317 +1752,44 @@ void print_Scroll_Menu(void) {
   // Set text size multiplier to 4
   tft.setTextSize(4);
 
-  // Declare variable to track which menu item is highlighted
+  // Determine the channel # and channel item #.
+  short channelNum = (short)((int)activeItem / (double)num_channel_options);  // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
+  short channelItemNum = (short)((int)activeItem % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
+
+  // Declare variable to track which menu_l element is highlighted
   int activeItemLoopIndex;
 
-  // Print respective menu page
-  switch(activeWindow) { 
-    /* CHANNEL MENU WINDOWS*/   
-    case ACTIVE_MENU_WINDOW::CHANNEL1:
+  // Determine the type of window 
+  if ((int)activeWindow < num_channel_options) {
+    // This is the main menu or a channel window.
 
-      // Find the location of the item in the menu matrix
-      activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C1_I1) + 4;
+    // Print menu header
+    print_Menu_Header(channelNum, 0, 0);
 
-      // Print menu header
-      print_Menu_Header(1, 0, 0);
-
-      //Print menu window
-      print_Menu_Window(channels[0], activeItemLoopIndex, 4, std::size(menu_l));
-
-      break; // End print from Channel 1
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2:
-
-      // Find the location of the item in the menu matrix
-      activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C2_I1) + 4;
-
-      // Print menu header
-      print_Menu_Header(2, 0, 0);
+    // Assign activeItemLoopIndex
+    // (Based on main menu vs. channel menu)
+    if ((int)activeWindow) {
+      // Channel menu assignment
 
       //Print menu window
-      print_Menu_Window(channels[1], activeItemLoopIndex, 4, std::size(menu_l));
-
-      break; // End print from Channel 2
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3:
-
-      // Find the location of the item in the menu matrix
-      activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C3_I1) + 4;
-
-      // Print menu header
-      print_Menu_Header(3, 0, 0);
+      print_Menu_Window(channels[channelNum - 1], (channelItemNum + 4), 4, std::size(menu_l));
+    }
+    else {
+      // Main menu assignment
 
       //Print menu window
-      print_Menu_Window(channels[2], activeItemLoopIndex, 4, std::size(menu_l));
+      print_Menu_Window(0, ((int)activeItem - 1), 0, 4);
+    }
+  }
+  else {
+    // This is a channel item window.
 
-      break; // End print from Channel 3
+    // Print menu header
+    print_Menu_Header(channelNum, (channelItemNum + 1), 1);
 
-    case ACTIVE_MENU_WINDOW::CHANNEL4:
+    // Print Item Information
+    (*print_funcs[channelItemNum])(channelNum);
 
-      // Find the location of the item in the menu matrix
-      activeItemLoopIndex = (int)(activeItem) - (int)(ACTIVE_MENU_ITEM::C4_I1) + 4;
-
-      // Print menu header
-      print_Menu_Header(4, 0, 0);
-
-      //Print menu window
-      print_Menu_Window(channels[3], activeItemLoopIndex, 4, std::size(menu_l));
-
-      break; // End print from Channel 4
-    
-    /* CHANNEL 1 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM1:
-      
-      // Print menu header
-      print_Menu_Header(1, 1, 1);
-
-      // Print item information
-      print_Channel_Dosage(1);
-      
-      break; 
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM2:
-
-      // Print menu header
-      print_Menu_Header(1, 2, 1);
-
-      // Print item information
-      print_Channel_Infusion_Rate(1);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM3:
-
-      // Print menu header
-      print_Menu_Header(1, 3, 1);
-
-      //Print item information
-      print_Syringe_Start(1);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM4:
-
-      // Print menu header
-      print_Menu_Header(1, 4, 1);
-      
-      // Print item information
-      print_Syringe_End(1);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5:
-
-      // Print menu header
-      print_Menu_Header(1, 5, 1);
-     
-      // Print item information
-      print_Channel_Calibrate(1);
-
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL1_ITEM6:
-
-      // Print menu header
-      print_Menu_Header(1, 6, 1);
-
-      // Print item information
-      print_Start_Stop(1);
-
-      break;
-
-    /* CHANNEL 2 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM1:
-
-      // Print menu header
-      print_Menu_Header(2, 1, 1);
-
-      // Print item information
-      print_Channel_Dosage(2);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM2:
-
-      // Print menu header
-      print_Menu_Header(2, 2, 1);
-
-      // Print item information
-      print_Channel_Infusion_Rate(2);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM3:
-
-      // Print menu header
-      print_Menu_Header(2, 3, 1);
-
-      //Print item information
-      print_Syringe_Start(2);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM4:
-
-      // Print menu header
-      print_Menu_Header(2, 4, 1);
-
-      // Print item information
-      print_Syringe_End(2);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM5:
-
-      // Print menu header
-      print_Menu_Header(2, 5, 1);
-
-      // Print item information
-      print_Channel_Calibrate(2);
-
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL2_ITEM6:
-
-      // Print menu header
-      print_Menu_Header(2, 6, 1);
-
-      // Print item information
-      print_Start_Stop(2);
-
-      break;
-
-    /* CHANNEL 3 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM1:
-
-      // Print menu header
-      print_Menu_Header(3, 1, 1);
-
-      // Print item information
-      print_Channel_Dosage(3);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM2:
-
-      // Print menu header
-      print_Menu_Header(3, 2, 1);
-
-      // Print item information
-      print_Channel_Infusion_Rate(3);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM3:
-
-      // Print menu header
-      print_Menu_Header(3, 3, 1);
-
-      //Print item information
-      print_Syringe_Start(3);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM4:
-
-      // Print menu header
-      print_Menu_Header(3, 4, 1);
-
-      // Print item information
-      print_Syringe_End(3);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM5:
-
-      // Print menu header
-      print_Menu_Header(3, 5, 1);
-
-      // Print item information
-      print_Channel_Calibrate(3);
-
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL3_ITEM6:
-
-      // Print menu header
-      print_Menu_Header(3, 6, 1);
-
-      // Print item information
-      print_Start_Stop(3);
-
-      break;
-
-    /* CHANNEL 4 MENU ITEM WINDOWS*/
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM1:
-
-      // Print menu header
-      print_Menu_Header(4, 1, 1);
-
-      // Print item information
-      print_Channel_Dosage(4);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM2:
-
-      // Print menu header
-      print_Menu_Header(4, 2, 1);
-
-      // Print item information
-      print_Channel_Infusion_Rate(4);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM3:
-
-      // Print menu header
-      print_Menu_Header(4, 3, 1);
-
-      //Print item information
-      print_Syringe_Start(4);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM4:
-
-      // Print menu header
-      print_Menu_Header(4, 4, 1);
-
-      // Print item information
-      print_Syringe_End(4);
-
-      break;
-
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM5:
-
-      // Print menu header
-      print_Menu_Header(4, 5, 1);
-
-      // Print item information
-      print_Channel_Calibrate(4);
-
-      break;
-    case ACTIVE_MENU_WINDOW::CHANNEL4_ITEM6:
-
-      // Print menu header
-      print_Menu_Header(4, 6, 1);
-
-      // Print item information
-      print_Start_Stop(4);
-
-      break;
-    
-    /* DEFAULT/MAIN MENU WINDOW*/
-    default:  // Also for ACTIVE_MENU_WINDOW::MAIN:
-
-      // Find the location of the item in the menu matrix
-      activeItemLoopIndex = (int)(activeItem);
-
-      // Print menu header
-      print_Menu_Header(0, 0, 0);
-
-      //Print menu window
-      print_Menu_Window(0, activeItemLoopIndex, 0, 4);
-
-      break; // End print from Main Menu
   }
 }
 
@@ -1526,22 +1798,22 @@ void print_Scroll_Menu(void) {
 */
 void print_Menu_Header(int channelNum, int itemNum, short subheader) {
 
-      // Declare and initialize the subheader item
-      String subheader_str = menu_l[itemNum + 3];
+  // Declare and initialize the subheader item
+  String subheader_str = menu_l[itemNum + 3];
 
-      // If the subheader is "Start", but the motor is actually running, change it to "Stop"
-      if (channelNum && (subheader_str == "Start") && (*channels[channelNum - 1]).pstat == PUMP_STATUS::RUNNING)
-        subheader_str = "Stop";
-      
-      // Print the rest of the header
-      tft.println(" " + menu_l[((channelNum == 0) ? (std::size(menu_l) - 1) : channelNum - 1)]);  //Print the name of the channel
-      if (subheader) {
-        tft.setTextSize(3);
-        tft.println("  " + subheader_str); // Print the channel's item
-      }
-      tft.setTextSize(4);
-      tft.println("-------------");
-      tft.setTextSize(3);
+  // If the subheader is "Start", but the motor is actually running, change it to "Stop"
+  if (channelNum && (subheader_str == "Start") && (*channels[channelNum - 1]).pstat == PUMP_STATUS::RUNNING)
+    subheader_str = "Stop";
+  
+  // Print the rest of the header
+  tft.println(" " + menu_l[((!channelNum) ? (std::size(menu_l) - 1) : channelNum - 1)]);  //Print the name of the channel
+  if (subheader) {
+    tft.setTextSize(3);
+    tft.println("  " + subheader_str); // Print the channel's item
+  }
+  tft.setTextSize(4);
+  tft.println("-------------");
+  tft.setTextSize(3);
 }
 
 /*
@@ -1590,9 +1862,8 @@ void print_Menu_Window(Pump_Channel *channel, int activeItemLoopIndex, int lStar
 */
 short set_Resolution_Setting(Pump_Channel *channel, double *param, double lower, double upper) {
 
-  steppers_do_tasks();
-
   // Check if channel pump motor is running
+  // TODO: Test if removing libray-dependent condition works
   if (steppers.is_running((*channel).motorNumber - 1))
     return 2;
 
@@ -1621,8 +1892,6 @@ short set_Resolution_Setting(Pump_Channel *channel, double *param, double lower,
 *     Prints the proper parameter resolution setting
 */
 void print_Resolution_Setting(RES_STATUS channelRes, String name, double param, String units, String preSpace, double outOfBounds[2]) {
-
-  steppers_do_tasks();
 
   RES_STATUS print_res = RES_STATUS::ONES;
   String resStr = String(param);
@@ -1887,6 +2156,7 @@ void calibrate_Stepper(int motorNum) {
   Pump_Channel *channel = channels[motorNum];
 
   if (dirRE == TURN_DIR::CCW) {
+    // TODO: Test if removing libray-dependent condition works
     if (steppers.is_finished(motorNum)) {
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
       set_Stepper_Motor_Direction(channel, TURN_DIR::CCW);
@@ -1894,6 +2164,7 @@ void calibrate_Stepper(int motorNum) {
     }
   }
   else if (dirRE == TURN_DIR::CW) { 
+    // TODO: Test if removing libray-dependent condition works
     if (steppers.is_finished(motorNum)) {
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
       set_Stepper_Motor_Direction(channel, TURN_DIR::CW);
@@ -1945,8 +2216,11 @@ void pause_Start_Stop(int channelNum) {
 
   // Set pump channel status to PAUSED
   (*channel).pstat = PUMP_STATUS::PAUSED;
-
+  
+  // TODO: Test if pausing timer works
+  
   steppers.pause(channelNum - 1);
+  
 }
 
 /**
@@ -1960,7 +2234,10 @@ void resume_Start_Stop(int channelNum) {
   // Set pump channel status to PAUSED
   (*channel).pstat = PUMP_STATUS::RUNNING;
 
+  // TODO: Test if pausing timer works
+  
   steppers.resume(channelNum - 1);  
+  
 }
 
 /**
@@ -1983,8 +2260,8 @@ void calculate_Motor_Parameters(int channelNum) {
   // Step delay
   (*channel).stepDelay = (totalTime) / ((*channel).stepCount - 1);
 
-  Serial.println("Motor " + String(channelNum) + " | Dosage: " + String((*channel).dosage) + " | Rate: " + String((*channel).infusionRate));
-  Serial.println("Motor " + String(channelNum) + " | Steps: " + String((*channel).stepCount) + " | Delay [us]: " + String((*channel).stepDelay));
+  //Serial.println("Motor " + String(channelNum) + " | Dosage: " + String((*channel).dosage) + " | Rate: " + String((*channel).infusionRate));
+  //Serial.println("Motor " + String(channelNum) + " | Steps: " + String((*channel).stepCount) + " | Delay [us]: " + String((*channel).stepDelay));
 }
 
 /**
@@ -2010,6 +2287,7 @@ void print_Start_Stop(int channelNum) {
   String c_stat;      // The current status of the motor
   String temp_str;
 
+  // TODO: Test if removing libray-dependent condition works
   if (steppers.is_running(channelNum - 1)) {
 
     c_stat = "Running";
