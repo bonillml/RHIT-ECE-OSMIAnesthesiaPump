@@ -6,23 +6,26 @@
 /*      Global Variables      */
 // Motor steps per revolution. Most steppers are 200 steps or 1.8 degrees/step
 #define MOTOR_STEPS 200
-#define RPM 120
 
 // Since microstepping is set externally, make sure this matches the selected mode
 // If it doesn't, the motor will move at a different RPM than chosen
 // 1=full step, 2=half step etc.
 #define MICROSTEPS 4
 
+// Thread-Count (Theads per Centimeter)
+#define THREAD_COUNT 13
 
+// Linear-Angular-Conversion (Revolution per Thread)
+#define LINEAR_ANGULAR_CONVERSION 1
 
 // Angle-Length (Revolutions per Centimeter)
-#define ANGLE_LENGTH 13
+#define ANGLE_LENGTH THREAD_COUNT * LINEAR_ANGULAR_CONVERSION
 
 // Step-Angle (Steps per Revolution)
 #define STEP_ANGLE MOTOR_STEPS * MICROSTEPS
 
 // Step-Length (Steps per Centimeter)
-#define STEP_LENGTH ANGLE_LENGTH * STEP_ANGLE
+#define STEP_LENGTH STEP_ANGLE * ANGLE_LENGTH
 
 // Board time since previous Rotary Encoder turn
 unsigned long prevTimeRE = 0;
@@ -61,7 +64,7 @@ ESP32Encoder re;
 enum TURN_DIR {
   CW,         // Clockwise
   CCW,        // Counter-clockwise
-  STOP
+  STOP        // Not moving
 };
 TURN_DIR dirRE = TURN_DIR::STOP; 
 
@@ -70,17 +73,35 @@ TFT_eSPI tft = TFT_eSPI();
 
 // Define menu array and metadata
 /*
-*     -=-IMPORTANT-=-:
+*     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-:
 *       *KEEP THE FIRST FOUR ELEMENTS (0-3) AS THE NAMES OF THE CHANNELS
-*       *KEEP THE LAST SIX ELEMENTS (4-9) AS THE NAMES OF THE CHANNELS
-*           - The names can be altered, by their placement in the 
-*             array must be the same. 
-*           - The element locations are used to print the names of 
-*             the menu items, thus allowing customization.
+*       *KEEP THE LAST ELEMENTS (4-...) AS THE NAMES OF THE CHANNEL ITEMS
+*           - The very last element MUST BE the Main Menu item.
+*           - The names/Strings can be altered, but their placement in the array SHOULD remain the same. 
+*              - If modifying the order of the remaining elements, ensure the 'print_funcs' and
+*                'set_funcs' function pointer arrays correspond to the correct number of menu items
+*                (i.e., num_channel_options - 1) and that the order of items in the 'menu_l' array 
+*                matches the order in the two pointer arrays.
+*           - The element locations are used to print the names of the menu items, thus allowing customization.
+*       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
 */
 String menu_l[11] = {"Channel 1", "Channel 2", "Channel 3", "Channel 4", "Dosage", "Infusion Rate", "Syringe Start", "Syringe End", "Calibrate", "Start", "Main Menu"};
-short num_channel_options = std::size(menu_l) - 4;
+#define OPTIONS_START_INDEX 4   // This can be thought of as the number of channels, or the index of the first menu item.
+short num_channel_options = std::size(menu_l) - OPTIONS_START_INDEX;
 
+// Define the enumerations to track the UI state.
+/**
+*     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-: (Notes apply to both 'ACTIVE_MENU_WINDOW' and 'ACTIVE_MENU_ITEM')
+*       *THE NUMBERING IN 'ACTIVE_MENU_WINDOW' ENUMERATION MUST MATCH ITS COUNTERPART IN 'ACTIVE_MENU_ITEM'
+*           - Do so even if there are menu items without menu windows or if there are menu windows without menu items 
+*             (e.g., ACTIVE_MENU_WINDOW::CHANNEL1_MAIN isn't an actual window, but it is needed).
+*       *THE VERY FIRST ENUMERATION MEMBER MUST BE A 'MAIN_MENU' WITH A VALUE OF 0.
+*           - The values from 0 to 'num_channel_options - 1' are reserved for any main menu options.
+*       *THE FIRST ITEM IN EACH CHANNEL's ENUMERATION FAMILY MUST BE '<channelNum> * num_channel_options'.
+*           - The remaining enumeration members must be continuous with the starting item. No breaks are allowed.
+*       *THE LAST ITEM IN EACH CHANNEL's ENUMERATION FAMILY MUST BE A 'MAIN_MENU' MENU ITEM.
+*       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
+*/
 enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display 
   MAIN,       // Displays the main menu options
   CHANNEL1,   // Displays pump channel 1 menu options
@@ -88,33 +109,41 @@ enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display
   CHANNEL3,   // Displays pump channel 3 menu options
   CHANNEL4,   // Displays pump channel 4 menu options
 
+  // Channel 1 Enumeration Family
   CHANNEL1_ITEM1 = 7,  // Channel 1 Item 1  (SET EQUAL TO num_channel_options)
   CHANNEL1_ITEM2,      // Channel 1 Item 2
   CHANNEL1_ITEM3,      // Channel 1 Item 3
   CHANNEL1_ITEM4,      // Channel 1 Item 4
   CHANNEL1_ITEM5,      // Channel 1 Item 5
   CHANNEL1_ITEM6,      // Channel 1 Item 6
+  CHANNEL1_MAIN,       // Channel 1 Main Menu
 
+  // Channel 2 Enumeration Family
   CHANNEL2_ITEM1,      // Channel 2 Item 1
   CHANNEL2_ITEM2,      // Channel 2 Item 2
   CHANNEL2_ITEM3,      // Channel 2 Item 3
   CHANNEL2_ITEM4,      // Channel 2 Item 4
   CHANNEL2_ITEM5,      // Channel 2 Item 5
   CHANNEL2_ITEM6,      // Channel 2 Item 6
+  ChANNEL2_MAIN,       // Channel 2 Main Menu
 
+  // Channel 3 Enumeration Family
   CHANNEL3_ITEM1,      // Channel 3 Item 1
   CHANNEL3_ITEM2,      // Channel 3 Item 2
   CHANNEL3_ITEM3,      // Channel 3 Item 3
   CHANNEL3_ITEM4,      // Channel 3 Item 4
   CHANNEL3_ITEM5,      // Channel 3 Item 5
   CHANNEL3_ITEM6,      // Channel 3 Item 6
+  CHANNEL3_MAIN,       // Channel 3 Main Menu
 
+  // Channel 4 Enumeration Family
   CHANNEL4_ITEM1,      // Channel 4 Item 1
   CHANNEL4_ITEM2,      // Channel 4 Item 2
   CHANNEL4_ITEM3,      // Channel 4 Item 3
   CHANNEL4_ITEM4,      // Channel 4 Item 4
   CHANNEL4_ITEM5,      // Channel 4 Item 5
-  CHANNEL4_ITEM6       // Channel 4 Item 6
+  CHANNEL4_ITEM6,      // Channel 4 Item 6
+  CHANNEL4_MAIN        // Channel 4 Main Menu
 };
 ACTIVE_MENU_WINDOW activeWindow = ACTIVE_MENU_WINDOW::MAIN;
 
@@ -125,6 +154,7 @@ enum ACTIVE_MENU_ITEM {
   Channel_3,  // Main Menu Channel 3
   Channel_4,  // Main Menu Channel 4
 
+  // Channel 1 Enumeration Family
   C1_I1 = 7,  // Channel 1 Item 1  (SET EQUAL TO num_channel_options)
   C1_I2,      // Channel 1 Item 2
   C1_I3,      // Channel 1 Item 3
@@ -133,6 +163,7 @@ enum ACTIVE_MENU_ITEM {
   C1_I6,      // Channel 1 Item 6
   C1_MM,      // Channel 1 Main Menu
 
+  // Channel 2 Enumeration Family
   C2_I1,      // Channel 2 Item 1
   C2_I2,      // Channel 2 Item 2
   C2_I3,      // Channel 2 Item 3
@@ -141,6 +172,7 @@ enum ACTIVE_MENU_ITEM {
   C2_I6,      // Channel 2 ITem 6
   C2_MM,      // Channel 2 Main Menu
 
+  // Channel 3 Enumeration Family
   C3_I1,      // Channel 3 Item 1
   C3_I2,      // Channel 3 Item 2
   C3_I3,      // Channel 3 Item 3
@@ -149,6 +181,7 @@ enum ACTIVE_MENU_ITEM {
   C3_I6,      // Channel 3 Item 6
   C3_MM,      // Channel 3 Main Menu
 
+  // Channel 4 Enumeration Family
   C4_I1,      // Channel 4 Item 1
   C4_I2,      // Channel 4 Item 2
   C4_I3,      // Channel 4 Item 3
@@ -161,9 +194,9 @@ ACTIVE_MENU_ITEM activeItem = ACTIVE_MENU_ITEM::Channel_1;
 
 // Flags for certain mechanics
 short menuOn = 1;
-short startStop = 0; // 0 - Exit, 1 - Start/Stop
+short startStop = 0;   // 0 - Exit, 1 - Start/Stop
 short curSWCount = 0;  // Tells Rotary Encoder when to switch menu windows
-short prevSWCount = 0;
+short prevSWCount = 0; 
 
 // Structure that will store each channel's configuration
 
@@ -210,12 +243,20 @@ typedef struct PumpChannel {
 Pump_Channel pumpChannel1, pumpChannel2, pumpChannel3, pumpChannel4;
 Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpChannel4};
 
+// Define function pointer arrays to allow quick menu item action and printing.
+/*
+*     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-:
+*           *THE SIZE OF BOTH ARRAYS SHOULD BE 'num_channel_options - 1' (i.e., all items but the main menu).
+*              - The order of functions in both function pointer arrays SHOULD reflect the order found in the 
+*                latter half of the 'menu_l' array.
+*       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
+*/
 // Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
 void set_Channel_Item_1(int channelNum) { set_Channel_Dosage(channelNum); }
 void set_Channel_Item_2(int channelNum) { set_Channel_Infusion_Rate(channelNum); }
 void set_Channel_Item_3(int channelNum) { set_Syringe_Start(channelNum); }
 void set_Channel_Item_4(int channelNum) { set_Syringe_End(channelNum); }
-void set_Channel_Item_5(int channelNum) { if (steppers.is_finished(channelNum - 1)) calibrate_Stepper(1 - 1); }
+void set_Channel_Item_5(int channelNum) { if (steppers.is_finished(channelNum - 1)) calibrate_Stepper(channelNum - 1); }
 void set_Channel_Item_6(int channelNum) { set_Start_Stop(channelNum); }
 
 void (*set_funcs[6])(int) = {set_Channel_Item_1, set_Channel_Item_2, set_Channel_Item_3, set_Channel_Item_4, set_Channel_Item_5, set_Channel_Item_6};
@@ -237,6 +278,9 @@ void motorTimerAction(TimerHandle_t xTimer) {
   steppers_do_tasks();
 }
 
+// Used for timing the UI updates
+int time_test = 0;
+
 void setup() {
   // Allow the correct Serial Baud Rate
   Serial.begin(115200);
@@ -246,7 +290,10 @@ void setup() {
   init_Rotary_Encoder();
   init_LCD_Menu();
 
-  motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(5), pdTRUE, 0, motorTimerAction);
+  // Initialize the time test for UI updates
+  time_test = 0;
+
+  motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(1), pdTRUE, 0, motorTimerAction);
 
   if (motorTimer) {
     Serial.println("RTOS Timer Initialized");
@@ -256,9 +303,7 @@ void setup() {
     Serial.println("RTOS Timer Failed to Initialize");
 
   Serial.print("Booting Firmware on Core: " + String(xPortGetCoreID()) + "\n");
-
-  Serial.println("Window: " + String(activeWindow));
-  Serial.println("Item: " + String(activeItem));
+  Serial.println("Optimized Software Booted");
 }
 
 void loop() {
@@ -270,9 +315,11 @@ void loop() {
     
     // Update the menu if the menu is active
     if (menuOn) {
+      if (time_test)
+        time_test = millis();
       switch_Scroll_Menu_Optimized();
-      Serial.println("Window: " + String(activeWindow));
-      Serial.println("Item: " + String(activeItem));
+      if (time_test)
+        Serial.println("UI Switch Menu took " + String(millis() - time_test) + " ms.");
     }
     // Update switch counter
     prevSWCount = curSWCount;
@@ -470,20 +517,26 @@ void re_Controller(void) {
 
         // If menu is on a channel item window, perform that window's action
         if ((int)(activeWindow) >= num_channel_options) {
+          if (time_test)
+            time_test = millis();
           perform_Menu_Action_Optimized();
+          if (time_test)
+            Serial.println("UI Perform Action took " + String(millis() - time_test) + " ms.");
         }
 
         // Boolean conditions to reduce menu scrolling/refreshing
-        short onMainMenus = ((int)(activeWindow) <= 4);                 // Determines if on a main menu window.
-        short onCalibrationPage = !(((int)(activeWindow) - (int)(ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5)) % (num_channel_options - 1)) && !onMainMenus;     // Determines if on a calibration page
+        short onMainMenus = ((int)(activeWindow) < num_channel_options);                                                                            // Determines if on a main menu window.
+        short onCalibrationPage = !(((int)(activeWindow) - (int)(ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5)) % (num_channel_options)) && !onMainMenus;     // Determines if on a calibration page
         short doneWithResSet = (((int)((*channels[0]).rstat) + (int)((*channels[1]).rstat) + (int)((*channels[2]).rstat) + (int)((*channels[3]).rstat)) >= 1000);
 
         // If the menu is on a non-updating channel item window, do not update the menu. 
         if (!onCalibrationPage && (onMainMenus || !doneWithResSet)) {
-          update_Scroll_Menu_Optimized(dirRE);
+          if (time_test)
+            time_test = millis();
+          update_Scroll_Menu_Optimized();
           print_Scroll_Menu_Optimized();
-          Serial.println("Window: " + String(activeWindow));
-          Serial.println("Item: " + String(activeItem));
+          if (time_test)
+            Serial.println("UI Update and Print took " + String(millis() - time_test) + " ms.");
         }
       }
     }
@@ -616,7 +669,7 @@ void perform_Menu_Action_Optimized(void) {
 *     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
 *
 */
-void update_Scroll_Menu_Optimized(TURN_DIR dir) {
+void update_Scroll_Menu_Optimized(void) {
 
   // Determine the channel # and channel item #.
   short channelNum = (short)activeWindow;                                     // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
@@ -624,7 +677,7 @@ void update_Scroll_Menu_Optimized(TURN_DIR dir) {
 
   // Define variable to track next highlighted option (Default values for main menu assignment)
   int activeItemInt = activeItem;
-  short activeItemMod = 4;
+  short activeItemMod = OPTIONS_START_INDEX;
 
   // Determine the type of window
   if (channelNum > 0 && channelNum < 5) {
@@ -645,11 +698,11 @@ void update_Scroll_Menu_Optimized(TURN_DIR dir) {
     return;
   }
 
-  if (dir == TURN_DIR::CW) {
+  if (dirRE == TURN_DIR::CW) {
     activeItemInt++;
     activeItemInt %= activeItemMod;
   }
-  else if (dir == TURN_DIR::CCW) {
+  else if (dirRE == TURN_DIR::CCW) {
     activeItemInt--;
     activeItemInt = (activeItemInt < 0) ? activeItemInt + activeItemMod : activeItemInt;
   }
@@ -677,11 +730,12 @@ void switch_Scroll_Menu_Optimized(void) {
   if ((int)activeWindow < num_channel_options) {
     // This is a main menu or channel window.
 
-    activeWindow = (ACTIVE_MENU_WINDOW)((channelItemNum == 6) ? 0 : (int)activeItem);
-    activeItem = (ACTIVE_MENU_ITEM)((int)activeItem * ((channelNum) ? 1 : num_channel_options));
-    activeItem = (channelItemNum == 6) ? (ACTIVE_MENU_ITEM)channelNum : activeItem;
+    activeWindow = (ACTIVE_MENU_WINDOW)((channelItemNum == (num_channel_options - 1)) ? 0 : (int)activeItem); // Go to main menu if main menu item clicked
+    activeItem = (ACTIVE_MENU_ITEM)((int)activeItem * ((channelNum) ? 1 : num_channel_options));              // Update the activeItem when item clicked
+    activeItem = (channelItemNum == (num_channel_options - 1)) ? (ACTIVE_MENU_ITEM)channelNum : activeItem;   // Override changes if clicked on main menu item
 
     // If the window is the start/stop page, calculate the motor parameters
+    // TODO: Will need to update the '5' if order or number of menu items changes
     if (channelNum && channelItemNum == 5)
       calculate_Motor_Parameters(channelNum);
   }
@@ -689,6 +743,7 @@ void switch_Scroll_Menu_Optimized(void) {
     // This is a channel item window
 
     // If the window is the start/stop page, do custom operation
+    // TODO: Will need to update the '5' if order or number of menu items changes
     if (channelNum && channelItemNum == 5) {
       // Return to main page if clicked on exit
       if (!startStop) {
@@ -707,10 +762,11 @@ void switch_Scroll_Menu_Optimized(void) {
     }
 
     // Return to main channel page if done setting syringe end.
-    if (channelItemNum < 4 && !((int)((*channels[channelNum - 1]).rstat) % 1000)) {
+    // TODO: Will need to update the '5's if order or number of menu items changes
+    if (channelItemNum < 5 && !((int)((*channels[channelNum - 1]).rstat) % 1000)) {
       (*channels[channelNum - 1]).rstat = RES_STATUS::ONES;
     }
-    else if (channelItemNum < 4) {
+    else if (channelItemNum < 5) {
       (*channels[channelNum - 1]).rstat = (RES_STATUS)((*channels[channelNum - 1]).rstat * 10);
 
       // Re-print the UI
@@ -771,13 +827,13 @@ void print_Scroll_Menu_Optimized(void) {
       // Channel menu assignment
 
       //Print menu window
-      print_Menu_Window(channels[channelNum - 1], (channelItemNum + 4), 4, std::size(menu_l));
+      print_Menu_Window(channels[channelNum - 1], (channelItemNum + OPTIONS_START_INDEX), OPTIONS_START_INDEX, std::size(menu_l));
     }
     else {
       // Main menu assignment
 
       //Print menu window
-      print_Menu_Window(0, ((int)activeItem - 1), 0, 4);
+      print_Menu_Window(0, ((int)activeItem - 1), 0, OPTIONS_START_INDEX);
     }
   }
   else {
@@ -798,7 +854,7 @@ void print_Scroll_Menu_Optimized(void) {
 void print_Menu_Header(int channelNum, int itemNum, short subheader) {
 
   // Declare and initialize the subheader item
-  String subheader_str = menu_l[itemNum + 3];
+  String subheader_str = menu_l[itemNum + (OPTIONS_START_INDEX - 1)];
 
   // If the subheader is "Start", but the motor is actually running, change it to "Stop"
   if (channelNum && (subheader_str == "Start") && (*channels[channelNum - 1]).pstat == PUMP_STATUS::RUNNING)
@@ -1154,12 +1210,22 @@ void calibrate_Stepper(int motorNum) {
   // Retrieve Pump Channel Structure
   Pump_Channel *channel = channels[motorNum];
 
+  // Check if the motor is currently running
+  if ((*channel).pstat == PUMP_STATUS::RUNNING)
+    return;
+
+  // Determine the amount of calibration movement 
+  // Highest - 10 Revolution per Turn
+  // Medium  - 1 Revolution per Turn
+  // Lowest  - 0.1 Revolution per Turn
+  float mult = (10.0 / (int)((*channel).rstat));
+
   if (dirRE == TURN_DIR::CCW) {
     // TODO: Test if removing libray-dependent condition works
     if (steppers.is_finished(motorNum)) {
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
       set_Stepper_Motor_Direction(channel, TURN_DIR::CCW);
-      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS, 1000);
+      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS * mult, 100);
     }
   }
   else if (dirRE == TURN_DIR::CW) { 
@@ -1167,7 +1233,7 @@ void calibrate_Stepper(int motorNum) {
     if (steppers.is_finished(motorNum)) {
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
       set_Stepper_Motor_Direction(channel, TURN_DIR::CW);
-      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS, 1000);
+      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS * mult, 100);
     }
   }
 }
@@ -1177,6 +1243,8 @@ void calibrate_Stepper(int motorNum) {
 */
 void print_Channel_Calibrate(int channelNum) {
 
+  tft.setTextSize(2);
+  tft.println("Rev/Turn: " + String(10.0 / (*channels[channelNum - 1]).rstat));
   tft.println("CW -> Push");
   tft.println("CCW -> Pull");
   tft.setTextSize(4);
@@ -1201,7 +1269,8 @@ void begin_Start_Stop(int channelNum) {
   // Set pump channel status to RUNNING
   (*channel).pstat = PUMP_STATUS::RUNNING;
 
-  // Start the motor
+  // Start the motor - Ensures that the syringe is being pushed.
+  set_Stepper_Motor_Direction(channel, TURN_DIR::CW);
   activate_Stepper_Motor(channelNum - 1, (*channel).stepCount, (*channel).stepDelay);
 }
 
