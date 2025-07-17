@@ -229,10 +229,10 @@ typedef struct PumpChannel {
   unsigned short directionPin = 0;          // The direction pin number of this channel.
   PUMP_STATUS pstat = PUMP_STATUS::IDLE;    // The status of the pump channel.
   RES_STATUS rstat = RES_STATUS::ONES;      // The current resolution digit for inputs.
-  double dosage = 9.2;                      // The amount of medicine in either mL or mg/kg
-  double infusionRate = 36.80;              // The rate at which to pump the medcine in either mL/hr or mg/kg/hr
+  double dosage = 0.1;                      // The amount of medicine in either mL or mg/kg
+  double infusionRate = 60;              // The rate at which to pump the medcine in either mL/hr or mg/kg/hr
   double syringeStart = 10.0;               // The length marker on the track where the pump will start pushing the syringe.
-  double syringeEnd = 14.5;                 // The length marker on the tracker at which the syringe can no longer be pushed.
+  double syringeEnd = 12.0;                 // The length marker on the tracker at which the syringe can no longer be pushed.
   unsigned long stepCount = 0;              // The amount of steps this channel needs to take to complete its infusion.
   unsigned long stepDelay = 0;              // The amount of time needed between steps to ensure the correct infusion rate.
 
@@ -296,11 +296,6 @@ void setup() {
 
   // Initialize the time test for UI updates
   time_test = 0;
-
-  // Tests audio alarm
-  alarm_Start();
-  delay(5000);
-  alarm_End();
 
   motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(1), pdTRUE, 0, motorTimerAction);
 
@@ -450,10 +445,8 @@ void update_Channel_Status(int channelNum) {
     return;
   }
 
-  // Don't do anything if channel is being configured.
-  if ((*channel).pstat == PUMP_STATUS::CONFIG || (*channel).pstat == PUMP_STATUS::IDLE) {
-    
-    
+  // Don't do anything if channel is being configured, if it's idle, or if it finished a transfusion.
+  if ((*channel).pstat == PUMP_STATUS::CONFIG || (*channel).pstat == PUMP_STATUS::IDLE || (*channel).pstat == PUMP_STATUS::COMPLETE) {
     return;
   }
   // Determine if the channel is idle or complete
@@ -462,17 +455,15 @@ void update_Channel_Status(int channelNum) {
 
     if ((*channel).pstat == PUMP_STATUS::RUNNING) {
       (*channel).pstat = PUMP_STATUS::COMPLETE;
-      Serial.println("Channel " + String((*channel).motorNumber + 1) + " Completed");
+      Serial.println("Channel " + String(channelNum) + " Completed");
+      print_All_Channels();
       alarm_Start();
     }
     else
       (*channel).pstat = PUMP_STATUS::IDLE;
     
-    
     return;
   }
-
-
 }
 
 // Updates every channel's status
@@ -918,6 +909,8 @@ void print_Menu_Window(Pump_Channel *channel, int activeItemLoopIndex, int lStar
     linePrint = menu_l[i];
     if (channel && linePrint == "Start" && (*channel).pstat == PUMP_STATUS::RUNNING)
       linePrint = "Stop";
+    else if (channel && linePrint == "Start" && (*channel).pstat == PUMP_STATUS::COMPLETE)
+      linePrint = "Reset";
 
     // Check if the item is currently highlighted
     if (activeItemLoopIndex == i) {
@@ -1281,7 +1274,10 @@ void print_Channel_Calibrate(int channelNum) {
   tft.setTextSize(2);
   tft.println("Scroll to Adjust");
   tft.println("");
-  tft.println("Click to Exit");
+  if (!((*channels[channelNum - 1]).rstat % 1000))
+    tft.println("Click to Exit");
+  else
+    tft.println("Click to alter Rev/Turn");
   tft.setTextSize(3);
 }
 
