@@ -281,17 +281,26 @@ void motorTimerAction(TimerHandle_t xTimer) {
 // Used for timing the UI updates
 int time_test = 0;
 
+/* TESTING AUDITORY INFUSION END ALARM */
+#define INF_END_ALM 8
+
 void setup() {
   // Allow the correct Serial Baud Rate
   Serial.begin(115200);
 
-  // Initializes all four Stepper Motors.
+  // Initializes subsystems.
   init_Stepper_Motors();
   init_Rotary_Encoder();
   init_LCD_Menu();
+  init_Audio_Alarm();
 
   // Initialize the time test for UI updates
   time_test = 0;
+
+  // Tests audio alarm
+  alarm_Start();
+  delay(5000);
+  alarm_End();
 
   motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(1), pdTRUE, 0, motorTimerAction);
 
@@ -393,6 +402,25 @@ void init_LCD_Menu(void) {
   print_Scroll_Menu_Optimized();
 }
 
+/**
+*     Initializes the Auditory Alarm For Ending An Infusion
+*/
+void init_Audio_Alarm(void) {
+  pinMode(INF_END_ALM, OUTPUT);
+  //digitalWrite(INF_END_ALM, LOW);
+}
+
+/* ---------- METHODS FOR INFUSION ALARM ---------- */
+
+void alarm_Start(void) {
+  //digitalWrite(INF_END_ALM, HIGH);
+  tone(INF_END_ALM, 440);
+}
+
+void alarm_End(void) {
+  noTone(INF_END_ALM);
+}
+
 /* ---------- METHODS FOR PUMP CHANNEL INFORMATION ---------- */
 
 // Updates a channel's status
@@ -435,6 +463,7 @@ void update_Channel_Status(int channelNum) {
     if ((*channel).pstat == PUMP_STATUS::RUNNING) {
       (*channel).pstat = PUMP_STATUS::COMPLETE;
       Serial.println("Channel " + String((*channel).motorNumber + 1) + " Completed");
+      alarm_Start();
     }
     else
       (*channel).pstat = PUMP_STATUS::IDLE;
@@ -1266,6 +1295,13 @@ void begin_Start_Stop(int channelNum) {
   // Retrieve pump channel
   Pump_Channel *channel = channels[channelNum - 1];
 
+  // If an infusion has just ended, update accordingly
+  if ((*channel).pstat == PUMP_STATUS::COMPLETE) {
+    alarm_End();
+    (*channel).pstat = PUMP_STATUS::IDLE;
+    return;
+  }
+
   // Set pump channel status to RUNNING
   (*channel).pstat = PUMP_STATUS::RUNNING;
 
@@ -1360,6 +1396,10 @@ void print_Start_Stop(int channelNum) {
 
     c_stat = "Running";
     re_action = "Stop";
+  }
+  else if ((*channel).pstat == PUMP_STATUS::COMPLETE) {
+    c_stat = "Complete";
+    re_action = "Reset";
   }
   else {
     c_stat = "Stopped";
