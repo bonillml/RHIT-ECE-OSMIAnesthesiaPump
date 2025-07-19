@@ -192,6 +192,16 @@ enum ACTIVE_MENU_ITEM {
 };
 ACTIVE_MENU_ITEM activeItem = ACTIVE_MENU_ITEM::Channel_1;
 
+// Define the various LCD pins (Found from User_Setup.h in the TFT_eSPI library folder)
+#define TFT_MISO 13
+#define TFT_MOSI 11
+#define TFT_SCLK 12
+#define TFT_CS   10  // Chip select control pin
+#define TFT_DC   9  // Data Command control pin
+#define TFT_RST  14  // Reset pin (could connect to RST pin)
+
+
+
 // Flags for certain mechanics
 short menuOn = 1;
 short startStop = 0;   // 0 - Exit, 1 - Start/Stop
@@ -395,6 +405,15 @@ void init_LCD_Menu(void) {
   tft.init();
   tft.setRotation(2);
   print_Scroll_Menu_Optimized();
+}
+
+/**
+*     Initializes the LCD Screen Touch functionality with provided calibration data.
+*/
+void init_Touch_Screen(void) {
+  // Use this calibration code in setup():
+  uint16_t calData[5] = { 355, 3461, 437, 3169, 7 };
+  tft.setTouch(calData);
 }
 
 /**
