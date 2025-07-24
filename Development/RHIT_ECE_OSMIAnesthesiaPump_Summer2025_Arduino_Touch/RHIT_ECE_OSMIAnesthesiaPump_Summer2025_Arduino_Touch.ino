@@ -2,6 +2,7 @@
 #include <MultiStepperLite.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include <TFT_eWidget.h>
 
 /*      Global Variables      */
 // Motor steps per revolution. Most steppers are 200 steps or 1.8 degrees/step
@@ -26,6 +27,10 @@
 
 // Step-Length (Steps per Centimeter)
 #define STEP_LENGTH STEP_ANGLE * ANGLE_LENGTH
+
+// Board time since previous touch button check
+unsigned long prevTouchTime = 0;
+unsigned long debounceTouch = 250;    // Keep larger than 250ms (Avg Human Reaction time)
 
 // Board time since previous Rotary Encoder turn
 unsigned long prevTimeRE = 0;
@@ -78,137 +83,83 @@ TFT_eSPI tft = TFT_eSPI();
 *       *KEEP THE LAST ELEMENTS (4-...) AS THE NAMES OF THE CHANNEL ITEMS
 *           - The very last element MUST BE the Main Menu item.
 *           - The names/Strings can be altered, but their placement in the array SHOULD remain the same. 
-*              - If modifying the order of the remaining elements, ensure the 'print_funcs' and
-*                'set_funcs' function pointer arrays correspond to the correct number of menu items
+*              - If modifying the order of the remaining elements, ensure the 'setup_item_funcs' and
+*                'update_item__funcs' function pointer arrays correspond to the correct number of menu items
 *                (i.e., num_channel_options - 1) and that the order of items in the 'menu_l' array 
 *                matches the order in the two pointer arrays.
 *           - The element locations are used to print the names of the menu items, thus allowing customization.
 *       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
 */
-String menu_l[11] = {"Channel 1", "Channel 2", "Channel 3", "Channel 4", "Dosage", "Infusion Rate", "Syringe Start", "Syringe End", "Calibrate", "Start", "Main Menu"};
+char  *menu_l[11] = {"Channel 1", "Channel 2", "Channel 3", "Channel 4", "Dosage", "Infusion Rate", "Syringe Start", "Syringe End", "Calibrate", "Start", "Main Menu"};
 #define OPTIONS_START_INDEX 4   // This can be thought of as the number of channels, or the index of the first menu item.
 short num_channel_options = std::size(menu_l) - OPTIONS_START_INDEX;
 
-// Define the enumerations to track the UI state.
-/**
-*     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-: (Notes apply to both 'ACTIVE_MENU_WINDOW' and 'ACTIVE_MENU_ITEM')
-*       *THE NUMBERING IN 'ACTIVE_MENU_WINDOW' ENUMERATION MUST MATCH ITS COUNTERPART IN 'ACTIVE_MENU_ITEM'
-*           - Do so even if there are menu items without menu windows or if there are menu windows without menu items 
-*             (e.g., ACTIVE_MENU_WINDOW::CHANNEL1_MAIN isn't an actual window, but it is needed).
-*       *THE VERY FIRST ENUMERATION MEMBER MUST BE A 'MAIN_MENU' WITH A VALUE OF 0.
-*           - The values from 0 to 'num_channel_options - 1' are reserved for any main menu options.
-*       *THE FIRST ITEM IN EACH CHANNEL's ENUMERATION FAMILY MUST BE '<channelNum> * num_channel_options'.
-*           - The remaining enumeration members must be continuous with the starting item. No breaks are allowed.
-*       *THE LAST ITEM IN EACH CHANNEL's ENUMERATION FAMILY MUST BE A 'MAIN_MENU' MENU ITEM.
-*       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
-*/
-enum ACTIVE_MENU_WINDOW { // Tracks which menu screen to display 
-  MAIN,       // Displays the main menu options
-  CHANNEL1,   // Displays pump channel 1 menu options
-  CHANNEL2,   // Displays pump channel 2 menu options
-  CHANNEL3,   // Displays pump channel 3 menu options
-  CHANNEL4,   // Displays pump channel 4 menu options
+// Define the button widgets
+// Buttons used within the main menu window;
+ButtonWidget channel1Btn = ButtonWidget(&tft);
+ButtonWidget channel2Btn = ButtonWidget(&tft);
+ButtonWidget channel3Btn = ButtonWidget(&tft);
+ButtonWidget channel4Btn = ButtonWidget(&tft);
 
-  // Channel 1 Enumeration Family
-  CHANNEL1_ITEM1 = 7,  // Channel 1 Item 1  (SET EQUAL TO num_channel_options)
-  CHANNEL1_ITEM2,      // Channel 1 Item 2
-  CHANNEL1_ITEM3,      // Channel 1 Item 3
-  CHANNEL1_ITEM4,      // Channel 1 Item 4
-  CHANNEL1_ITEM5,      // Channel 1 Item 5
-  CHANNEL1_ITEM6,      // Channel 1 Item 6
-  CHANNEL1_MAIN,       // Channel 1 Main Menu
+// Buttons used within a channel menu window.
+ButtonWidget dosageBtn = ButtonWidget(&tft);
+ButtonWidget infusionRateBtn = ButtonWidget(&tft);
+ButtonWidget syringeStartBtn = ButtonWidget(&tft);
+ButtonWidget syringeEndBtn = ButtonWidget(&tft);
+ButtonWidget calibrateBtn = ButtonWidget(&tft);
+ButtonWidget startStopBtn = ButtonWidget(&tft);
+ButtonWidget mainMenuBtn = ButtonWidget(&tft);
 
-  // Channel 2 Enumeration Family
-  CHANNEL2_ITEM1,      // Channel 2 Item 1
-  CHANNEL2_ITEM2,      // Channel 2 Item 2
-  CHANNEL2_ITEM3,      // Channel 2 Item 3
-  CHANNEL2_ITEM4,      // Channel 2 Item 4
-  CHANNEL2_ITEM5,      // Channel 2 Item 5
-  CHANNEL2_ITEM6,      // Channel 2 Item 6
-  ChANNEL2_MAIN,       // Channel 2 Main Menu
+// Buttons used within a channel item's window.
+ButtonWidget firstResBtn = ButtonWidget(&tft);
+ButtonWidget secondResBtn = ButtonWidget(&tft);
+ButtonWidget thirdResBtn = ButtonWidget(&tft);
+ButtonWidget exitItemBtn = ButtonWidget(&tft);
 
-  // Channel 3 Enumeration Family
-  CHANNEL3_ITEM1,      // Channel 3 Item 1
-  CHANNEL3_ITEM2,      // Channel 3 Item 2
-  CHANNEL3_ITEM3,      // Channel 3 Item 3
-  CHANNEL3_ITEM4,      // Channel 3 Item 4
-  CHANNEL3_ITEM5,      // Channel 3 Item 5
-  CHANNEL3_ITEM6,      // Channel 3 Item 6
-  CHANNEL3_MAIN,       // Channel 3 Main Menu
+// Create arrays of button instances to utilize in print loops.
+ButtonWidget* main_b[] = {&channel1Btn, &channel2Btn, &channel3Btn, &channel4Btn};
+ButtonWidget* channel_b[] = {&dosageBtn, &infusionRateBtn, &syringeStartBtn, &syringeEndBtn, &calibrateBtn, &startStopBtn, &mainMenuBtn};
+ButtonWidget* item_b[] = {&firstResBtn, &secondResBtn, &thirdResBtn, &exitItemBtn};
 
-  // Channel 4 Enumeration Family
-  CHANNEL4_ITEM1,      // Channel 4 Item 1
-  CHANNEL4_ITEM2,      // Channel 4 Item 2
-  CHANNEL4_ITEM3,      // Channel 4 Item 3
-  CHANNEL4_ITEM4,      // Channel 4 Item 4
-  CHANNEL4_ITEM5,      // Channel 4 Item 5
-  CHANNEL4_ITEM6,      // Channel 4 Item 6
-  CHANNEL4_MAIN        // Channel 4 Main Menu
-};
-ACTIVE_MENU_WINDOW activeWindow = ACTIVE_MENU_WINDOW::MAIN;
+// Calculate the size of each array.
+uint8_t main_b_size = sizeof(main_b) / sizeof(main_b[0]);
+uint8_t channel_b_size = sizeof(channel_b) / sizeof(channel_b[0]);
+uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
 
-enum ACTIVE_MENU_ITEM {
-  Main,  // Extra piece for simpler enum calculations
-  Channel_1,  // Main Menu Channel 1
-  Channel_2,  // Main Menu Channel 2
-  Channel_3,  // Main Menu Channel 3
-  Channel_4,  // Main Menu Channel 4
-
-  // Channel 1 Enumeration Family
-  C1_I1 = 7,  // Channel 1 Item 1  (SET EQUAL TO num_channel_options)
-  C1_I2,      // Channel 1 Item 2
-  C1_I3,      // Channel 1 Item 3
-  C1_I4,      // Channel 1 Item 4
-  C1_I5,      // Channel 1 Item 5
-  C1_I6,      // Channel 1 Item 6
-  C1_MM,      // Channel 1 Main Menu
-
-  // Channel 2 Enumeration Family
-  C2_I1,      // Channel 2 Item 1
-  C2_I2,      // Channel 2 Item 2
-  C2_I3,      // Channel 2 Item 3
-  C2_I4,      // Channel 2 Item 4
-  C2_I5,      // Channel 2 Item 5
-  C2_I6,      // Channel 2 ITem 6
-  C2_MM,      // Channel 2 Main Menu
-
-  // Channel 3 Enumeration Family
-  C3_I1,      // Channel 3 Item 1
-  C3_I2,      // Channel 3 Item 2
-  C3_I3,      // Channel 3 Item 3
-  C3_I4,      // Channel 3 Item 4
-  C3_I5,      // Channel 3 Item 5
-  C3_I6,      // Channel 3 Item 6
-  C3_MM,      // Channel 3 Main Menu
-
-  // Channel 4 Enumeration Family
-  C4_I1,      // Channel 4 Item 1
-  C4_I2,      // Channel 4 Item 2
-  C4_I3,      // Channel 4 Item 3
-  C4_I4,      // Channel 4 Item 4
-  C4_I5,      // Channel 4 Item 5
-  C4_I6,      // Channel 4 Item 6
-  C4_MM       // Channel 4 Main Menu
-};
-ACTIVE_MENU_ITEM activeItem = ACTIVE_MENU_ITEM::Channel_1;
+// Useful macro for calculating the height of buttons and spaces between buttons.
+#define BUTTON_WIDTH(num_buttons, total_height) ((0.75 * total_height) / (num_buttons))
+#define SPACE_WIDTH(num_buttons, total_height) ((0.25 * total_height) / (num_buttons + 1))
 
 // Define the various LCD pins (Found from User_Setup.h in the TFT_eSPI library folder)
 #define TFT_MISO 13
 #define TFT_MOSI 11
 #define TFT_SCLK 12
-#define TFT_CS   10  // Chip select control pin
-#define TFT_DC   9  // Data Command control pin
-#define TFT_RST  14  // Reset pin (could connect to RST pin)
+#define TFT_CS   10   // Chip select control pin
+#define TFT_DC   9    // Data Command control pin
+#define TFT_RST  14   // Reset pin (could connect to RST pin)
 
-int test = TOUCH_CS;
+#define TOUCH_CS 3
 
 // Flags for certain mechanics
-short menuOn = 1;
+short onChannelItem = 0;
 short startStop = 0;   // 0 - Exit, 1 - Start/Stop
 short curSWCount = 0;  // Tells Rotary Encoder when to switch menu windows
 short prevSWCount = 0; 
+int x_default = 0, y_default = 0;
 
-// Structure that will store each channel's configuration
+/*  Determines which channel the current menu window belongs to.
+*   
+*   Is used to pass in parameters to button functions.
+*/
+enum SELECTED_CHANNEL_WINDOW {
+  OTHER_MENU,
+  CHANNEL_1,
+  CHANNEL_2,
+  CHANNEL_3,
+  CHANNEL_4
+};
+// A variable to track which channel the current window belongs to.
+short activeChannel = (short)(SELECTED_CHANNEL_WINDOW::OTHER_MENU);
 
 /*  Determines the status of a pump channel
 *
@@ -234,6 +185,7 @@ enum RES_STATUS {
   RES_DONE = 1000
 };
 
+// Structure that will store each channel's configuration
 typedef struct PumpChannel {
   unsigned short motorNumber = 0;           // The motor number of this channel
   unsigned short directionPin = 0;          // The direction pin number of this channel.
@@ -262,24 +214,153 @@ Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpC
 *       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
 */
 // Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
-void set_Channel_Item_1(int channelNum) { set_Channel_Dosage(channelNum); }
-void set_Channel_Item_2(int channelNum) { set_Channel_Infusion_Rate(channelNum); }
-void set_Channel_Item_3(int channelNum) { set_Syringe_Start(channelNum); }
-void set_Channel_Item_4(int channelNum) { set_Syringe_End(channelNum); }
-void set_Channel_Item_5(int channelNum) { if (steppers.is_finished(channelNum - 1)) calibrate_Stepper(channelNum - 1); }
-void set_Channel_Item_6(int channelNum) { set_Start_Stop(channelNum); }
+void setup_Main_Menu(void) {
+  onChannelItem = 0;
+  activeChannel = 0;
+  print_Menu_Header(activeChannel, 0, 0, "  ");
+  print_Menu_Window(activeChannel);
+}
+void setup_Channel_1(void) {
+  onChannelItem = 0;
+  activeChannel = 1;
+  if (activeChannel) {
+    print_Menu_Header(activeChannel, 0, 0, "   ");
+    print_Menu_Window(activeChannel);
+  }
+}
+void setup_Channel_2(void) {
+  onChannelItem = 0;
+  activeChannel = 2;
+  if (activeChannel) {
+    print_Menu_Header(activeChannel, 0, 0, "   ");
+    print_Menu_Window(activeChannel);
+  }
+}
+void setup_Channel_3(void) {
+  onChannelItem = 0;
+  activeChannel = 3;
+  if (activeChannel) {
+    print_Menu_Header(activeChannel, 0, 0, "   ");
+    print_Menu_Window(activeChannel);
+  }
+}
+void setup_Channel_4(void) {
+  onChannelItem = 0;
+  activeChannel = 4;
+  if (activeChannel) {
+    print_Menu_Header(activeChannel, 0, 0, "   ");
+    print_Menu_Window(activeChannel);
+  }
+}
 
-void (*set_funcs[6])(int) = {set_Channel_Item_1, set_Channel_Item_2, set_Channel_Item_3, set_Channel_Item_4, set_Channel_Item_5, set_Channel_Item_6};
+void (*setup_channel_funcs[])(void) = {setup_Channel_1, setup_Channel_2, setup_Channel_3, setup_Channel_4};
+
+// Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
+void update_Channel_Item_1(void) { if (activeChannel) set_Channel_Dosage(activeChannel); }
+void update_Channel_Item_2(void) { if (activeChannel) set_Channel_Infusion_Rate(activeChannel); }
+void update_Channel_Item_3(void) { if (activeChannel) set_Syringe_Start(activeChannel); }
+void update_Channel_Item_4(void) { if (activeChannel) set_Syringe_End(activeChannel); }
+void update_Channel_Item_5(void) { if (activeChannel && steppers.is_finished(activeChannel - 1)) calibrate_Stepper(activeChannel - 1); }
+void update_Channel_Item_6(void) { if (activeChannel) set_Start_Stop(activeChannel); }
+
+void (*update_item_funcs[])(void) = {update_Channel_Item_1, update_Channel_Item_2, update_Channel_Item_3, update_Channel_Item_4, update_Channel_Item_5, update_Channel_Item_6};
 
 // Setup an array of pointers to various printing functions. Allows quick and structured access to printing methods.
-void print_Channel_Item_1(int channelNum) { print_Channel_Dosage(channelNum); }
-void print_Channel_Item_2(int channelNum) { print_Channel_Infusion_Rate(channelNum); }
-void print_Channel_Item_3(int channelNum) { print_Syringe_Start(channelNum); }
-void print_Channel_Item_4(int channelNum) { print_Syringe_End(channelNum); }
-void print_Channel_Item_5(int channelNum) { print_Channel_Calibrate(channelNum); }
-void print_Channel_Item_6(int channelNum) { print_Start_Stop(channelNum); }
+void setup_Channel_Item_1(void) { 
+  if (activeChannel && !onChannelItem) {
+    onChannelItem = 1;
+    print_Menu_Header(activeChannel, 1, 1, "   ");
+    print_Channel_Dosage(activeChannel);
+  } 
+}
+void setup_Channel_Item_2(void) { 
+  if (activeChannel && !onChannelItem) {
+    onChannelItem = 1;
+    print_Menu_Header(activeChannel, 2, 1, "   ");
+    print_Channel_Infusion_Rate(activeChannel); 
+  }
+}
+void setup_Channel_Item_3(void) { 
+  if (activeChannel && !onChannelItem) {
+    onChannelItem = 1;
+    print_Menu_Header(activeChannel, 3, 1, "   ");
+    print_Syringe_Start(activeChannel); 
+  }
+}
+void setup_Channel_Item_4(void) { 
+  if (activeChannel && !onChannelItem) {
+    onChannelItem = 1;
+    print_Menu_Header(activeChannel, 4, 1, "   ");
+    print_Syringe_End(activeChannel); 
+  }
+}
+void setup_Channel_Item_5(void) { 
+  if (activeChannel && !onChannelItem) {
+    onChannelItem = 1;
+    print_Menu_Header(activeChannel, 5, 1, "   ");
+    print_Channel_Calibrate(activeChannel); 
+  }
+}
+void setup_Channel_Item_6(void) { 
+  if (activeChannel && !onChannelItem) {
+    onChannelItem = 1;
+    print_Menu_Header(activeChannel, 6, 1, "   ");
+    print_Start_Stop(activeChannel); 
+  }
+}
+void setup_Channel_Item_MM(void) {
+  if (!onChannelItem)
+    setup_Main_Menu();
+}
 
-void (*print_funcs[6])(int) = {print_Channel_Item_1, print_Channel_Item_2, print_Channel_Item_3, print_Channel_Item_4, print_Channel_Item_5, print_Channel_Item_6};
+void (*setup_item_funcs[])(void) = {setup_Channel_Item_1, setup_Channel_Item_2, setup_Channel_Item_3, setup_Channel_Item_4, setup_Channel_Item_5, setup_Channel_Item_6, setup_Channel_Item_MM};
+
+// Determines the actions to take given a touch occuring at coordinates x and y.
+void check_Touch_Buttons(void) {
+
+  uint16_t x = 9999, y = 9999; // To store the touch coordinates
+
+  // Pressed will be set true if there is a valid touch on the screen
+  bool pressed = tft.getTouch(&x, &y);
+
+  if (activeChannel) {
+    // Within a channel Menu
+    for (int i = 0; i < channel_b_size; i++) {
+      if (pressed) {
+        if (!onChannelItem && (*channel_b[i]).contains(y, tft.height() - x - 105)) {
+          (*channel_b[i]).press(true);
+          (*channel_b[i]).pressAction();
+          Serial.println("You pressed channel item button: " + String(i + 1));
+          break;
+        }
+        else if (onChannelItem) {
+          Serial.println("You clicked, but you're already on a channel item.");
+          (*setup_channel_funcs[i])();
+          break;
+        }
+      }
+      else {
+        (*channel_b[i]).press(false);
+      }
+    }
+  }
+  else {
+    // Within the Main Menu
+    for (int i = 0; i < main_b_size; i++) {
+      if (pressed) {
+        if ((*main_b[i]).contains(y, tft.height() - x - 70)) {
+          (*main_b[i]).press(true);
+          (*main_b[i]).pressAction();
+          Serial.println("You pressed channel button: " + String(i + 1));
+          break;
+        }
+      }
+      else {
+        (*main_b[i]).press(false);
+      }
+    }
+  }
+}
 
 // Declare RTOS timer
 TimerHandle_t motorTimer;
@@ -288,8 +369,6 @@ void motorTimerAction(TimerHandle_t xTimer) {
   steppers_do_tasks();
 }
 
-// Used for timing the UI updates
-int time_test = 0;
 
 /* TESTING AUDITORY INFUSION END ALARM */
 #define INF_END_ALM 8
@@ -304,9 +383,11 @@ void setup() {
   init_LCD_Menu();
   init_Audio_Alarm();
 
-  // Initialize the time test for UI updates
-  time_test = 0;
+  // Set the default LCD cursor coordinate.
+  x_default = tft.getCursorX();
+  y_default = tft.getCursorY();
 
+  // Initialize the Stepper Motor timer
   motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(1), pdTRUE, 0, motorTimerAction);
 
   if (motorTimer) {
@@ -318,30 +399,21 @@ void setup() {
 
   Serial.print("Booting Firmware on Core: " + String(xPortGetCoreID()) + "\n");
   Serial.println("Optimized Software Booted");
+
+  Serial.println("Dimensions (" + String(tft.width()) + ", " + String(tft.height()) + ")");
+  setup_Main_Menu();
 }
 
 void loop() {
 
   update_All_Channels();
 
-  // Check to see if the menu needs to update windows
-  if (curSWCount != prevSWCount) {
-    
-    // Update the menu if the menu is active
-    if (menuOn) {
-      if (time_test)
-        time_test = millis();
-      switch_Scroll_Menu_Optimized();
-      if (time_test)
-        Serial.println("UI Switch Menu took " + String(millis() - time_test) + " ms.");
-    }
-    // Update switch counter
-    prevSWCount = curSWCount;
-  }
+  // Scan keys every 50ms at most
+  if (millis() - prevTouchTime >= debounceTouch) {
 
-  //steppers_do_tasks();    // Attempt with Timer Interrupts
-  // Check to see if Rotary Encoder performed actions
-  re_Controller();
+    prevTouchTime = millis();
+    check_Touch_Buttons();
+  }
 
 }
 
@@ -404,7 +476,8 @@ void init_Rotary_Encoder(void) {
 void init_LCD_Menu(void) {
   tft.init();
   tft.setRotation(2);
-  print_Scroll_Menu_Optimized();
+  //init_Touch_Screen();
+  init_Touch_Buttons();
 }
 
 /**
@@ -414,6 +487,43 @@ void init_Touch_Screen(void) {
   // Use this calibration code in setup():
   uint16_t calData[5] = { 355, 3461, 437, 3169, 7 };
   tft.setTouch(calData);
+}
+
+/**
+*     Initializes the actions and graphics for the touch buttons.
+*/
+void init_Touch_Buttons(void) {
+  Serial.println("Width: " + String(tft.width()) + " | Height: " + String(tft.height()));
+
+  uint16_t x = 70; // End of Menu Header
+  uint16_t y = tft.width() / 2;   // For centralized buttons
+
+  uint16_t buttonHeight = y;
+
+  uint16_t buttonWidth = BUTTON_WIDTH(main_b_size, tft.height() - x);
+  uint16_t spaceWidth = SPACE_WIDTH(main_b_size, tft.height() - x);
+  x += (buttonWidth);
+
+  // Set the setup function for each main or channel menu button.
+  for (int i = 0; i < main_b_size; i++) {
+    (*main_b[i]).initButton(y, x, buttonHeight, buttonWidth, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i], 1);
+    (*main_b[i]).setPressAction(*(setup_channel_funcs + i));
+    x += (buttonWidth + spaceWidth);
+  } 
+
+  // TODO: Complete this section of the channel setup.
+  x = 70;
+
+  buttonWidth = BUTTON_WIDTH(channel_b_size, tft.height() - x);
+  spaceWidth = SPACE_WIDTH(channel_b_size, tft.height() - x);
+  x += (buttonWidth);
+
+  // Set the print function for each channel item button.
+  for (int i = 0 ; i < channel_b_size; i++) {
+    (*channel_b[i]).initButton(y, x, buttonHeight, buttonWidth, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i + OPTIONS_START_INDEX], 1);
+    (*channel_b[i]).setPressAction(*(setup_item_funcs + i));
+    x += (buttonWidth + spaceWidth);
+  }
 }
 
 /**
@@ -551,33 +661,9 @@ void re_Controller(void) {
     if (curCountRE != prevCountRE) {
       dirRE = (curCountRE - prevCountRE > 0) ? TURN_DIR::CCW : TURN_DIR::CW;
 
-      // Determine if the Rotary Encoder has moved enough to warrant menu scrolling
-      if (curCountRE % RE_SCROLL_COUNT == 0 && menuOn == 1) {
+      // Because touch screen is implemented, there is no need
+      // to update the menu from the Rotary Encoder
 
-        // If menu is on a channel item window, perform that window's action
-        if ((int)(activeWindow) >= num_channel_options) {
-          if (time_test)
-            time_test = millis();
-          perform_Menu_Action_Optimized();
-          if (time_test)
-            Serial.println("UI Perform Action took " + String(millis() - time_test) + " ms.");
-        }
-
-        // Boolean conditions to reduce menu scrolling/refreshing
-        short onMainMenus = ((int)(activeWindow) < num_channel_options);                                                                            // Determines if on a main menu window.
-        short onCalibrationPage = !(((int)(activeWindow) - (int)(ACTIVE_MENU_WINDOW::CHANNEL1_ITEM5)) % (num_channel_options)) && !onMainMenus;     // Determines if on a calibration page
-        short doneWithResSet = (((int)((*channels[0]).rstat) + (int)((*channels[1]).rstat) + (int)((*channels[2]).rstat) + (int)((*channels[3]).rstat)) >= 1000);
-
-        // If the menu is on a non-updating channel item window, do not update the menu. 
-        if (!onCalibrationPage && (onMainMenus || !doneWithResSet)) {
-          if (time_test)
-            time_test = millis();
-          update_Scroll_Menu_Optimized();
-          print_Scroll_Menu_Optimized();
-          if (time_test)
-            Serial.println("UI Update and Print took " + String(millis() - time_test) + " ms.");
-        }
-      }
     }
     else {
       dirRE = TURN_DIR::STOP;
@@ -677,220 +763,18 @@ int get_Active_Motor(void) {
 
 /* ---------- METHODS FOR MENU DISPLAY, CONFIGURATION, & NAVIGATION  ---------- */
 
-/**
-*     Perform channel menu item window action. ~ Nearly 10 lines of code
-*     
-*     REQUIRES FOLLOWING ASSUMPTIONS;
-*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
-*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
-*     - All channel items are contiguous in their respective enums.
-*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
-*
-*/
-void perform_Menu_Action_Optimized(void) {
-
-  // Determine the channel # and channel item #.
-  short channelNum = (short)((int)activeWindow / (double)num_channel_options);  // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
-  short channelItemNum = (short)((int)activeWindow % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
-
-  // Check if current window allows function to run
-  if ((int)activeWindow >= num_channel_options)
-    (*set_funcs[channelItemNum])(channelNum);       // Set Item Information
-}
-
-/**
-*     Updates the scroll menu's active item ~ Nearly 40 lines of code
-*     
-*     REQUIRES FOLLOWING ASSUMPTIONS;
-*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
-*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
-*     - All channel items are contiguous in their respective enums.
-*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
-*
-*/
-void update_Scroll_Menu_Optimized(void) {
-
-  // Determine the channel # and channel item #.
-  short channelNum = (short)activeWindow;                                     // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
-  short channelItemNum = (short)((int)activeItem % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
-
-  // Define variable to track next highlighted option (Default values for main menu assignment)
-  int activeItemInt = activeItem;
-  short activeItemMod = OPTIONS_START_INDEX;
-
-  // Determine the type of window
-  if (channelNum > 0 && channelNum < 5) {
-    // Channel menu assignment
-
-    // Reassign activeItemMod
-    activeItemMod = num_channel_options;
-
-    // Shift the channel item index to 0
-    activeItemInt -= (int)(num_channel_options * channelNum);
-  }
-  else if (!activeWindow) {
-    // Main menu assignment 
-    activeItemInt--;
-  }
-  else {
-    // Unexpected case
-    return;
-  }
-
-  if (dirRE == TURN_DIR::CW) {
-    activeItemInt++;
-    activeItemInt %= activeItemMod;
-  }
-  else if (dirRE == TURN_DIR::CCW) {
-    activeItemInt--;
-    activeItemInt = (activeItemInt < 0) ? activeItemInt + activeItemMod : activeItemInt;
-  }
-
-  // Cast activeItem back to enumeration
-  activeItem = (ACTIVE_MENU_ITEM) (activeItemInt + ((channelNum) ? (int)(num_channel_options * channelNum) : 1));
-}
-
-/**
-*     Controls the scroll menu's active window ~ Nearly 60 lines of code
-*     
-*     REQUIRES FOLLOWING ASSUMPTIONS;
-*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
-*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
-*     - All channel items are contiguous in their respective enums.
-*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
-*
-*/
-void switch_Scroll_Menu_Optimized(void) {
-
-  // Determine the channel # and channel item #.
-  short channelNum = (short)((int)activeItem / (double)num_channel_options);  // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
-  short channelItemNum = (short)((int)activeItem % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
-
-  if ((int)activeWindow < num_channel_options) {
-    // This is a main menu or channel window.
-
-    activeWindow = (ACTIVE_MENU_WINDOW)((channelItemNum == (num_channel_options - 1)) ? 0 : (int)activeItem); // Go to main menu if main menu item clicked
-    activeItem = (ACTIVE_MENU_ITEM)((int)activeItem * ((channelNum) ? 1 : num_channel_options));              // Update the activeItem when item clicked
-    activeItem = (channelItemNum == (num_channel_options - 1)) ? (ACTIVE_MENU_ITEM)channelNum : activeItem;   // Override changes if clicked on main menu item
-
-    // If the window is the start/stop page, calculate the motor parameters
-    // TODO: Will need to update the '5' if order or number of menu items changes
-    if (channelNum && channelItemNum == 5)
-      calculate_Motor_Parameters(channelNum);
-  }
-  else {
-    // This is a channel item window
-
-    // If the window is the start/stop page, do custom operation
-    // TODO: Will need to update the '5' if order or number of menu items changes
-    if (channelNum && channelItemNum == 5) {
-      // Return to main page if clicked on exit
-      if (!startStop) {
-      }
-      // TODO: Test if removing libray-dependent condition works
-      else if (steppers.is_running(channelNum - 1)) {  // startStop = 1 - Stop
-        pause_Start_Stop(channelNum);
-      }
-      else if (steppers.is_paused(channelNum - 1)) {   // startStop = 1 - Start/Resume
-        resume_Start_Stop(channelNum);
-      }
-      else if (steppers.is_finished(channelNum - 1)) { // startStop = 1 - Start/Begin
-        begin_Start_Stop(channelNum);
-      }
-      startStop = 0;
-    }
-
-    // Return to main channel page if done setting syringe end.
-    // TODO: Will need to update the '5's if order or number of menu items changes
-    if (channelItemNum < 5 && !((int)((*channels[channelNum - 1]).rstat) % 1000)) {
-      (*channels[channelNum - 1]).rstat = RES_STATUS::ONES;
-    }
-    else if (channelItemNum < 5) {
-      (*channels[channelNum - 1]).rstat = (RES_STATUS)((*channels[channelNum - 1]).rstat * 10);
-
-      // Re-print the UI
-      print_Scroll_Menu_Optimized();
-      return;
-    }
-
-    activeWindow = (ACTIVE_MENU_WINDOW)channelNum;
-    activeItem = (ACTIVE_MENU_ITEM)((channelNum * num_channel_options) + channelItemNum);
-  }
-
-  // Re-print the UI
-  print_Scroll_Menu_Optimized();
-}
-
-/**
-*     Prints the scroll menu ~ Nearly 60 lines of code
-*     
-*     REQUIRES FOLLOWING ASSUMPTIONS;
-*     - ACTIVE_MENU_WINDOW::<CHANNEL1> == ACTIVE_MENU_ITEM::<Channel_1> W.L.O.G.
-*     - The MAIN MENU enum in both ACTIVE_MENU_WINDOW and ACTIVE_MENU_ITEM are 0
-*     - All channel items are contiguous in their respective enums.
-*     - Channel 1 Item 1 starts with value 7, Channel 2 Item 1 starts with value 14, and so forth.
-*
-*/
-void print_Scroll_Menu_Optimized(void) {
-
-  // Fill screen with light grey
-  tft.fillScreen(TFT_LIGHTGREY);
-
-  // Set "cursor" at top left corner of display (0,0) and select font 2
-  // (cursor will move to next line automatically during printing with 'tft.println'
-  //  or stay on the line is there is room for the text with tft.print)
-  tft.setCursor(0, 0, 2);
-
-  // Set the font colour to be white with a black background
-  tft.setTextColor(TFT_BLACK,TFT_LIGHTGREY);  
-  // Set text size multiplier to 4
-  tft.setTextSize(4);
-
-  // Determine the channel # and channel item #.
-  short channelNum = (short)((int)activeItem / (double)num_channel_options);  // SHOULD BE BETWEEN 0 and 4 FOR THIS METHOD
-  short channelItemNum = (short)((int)activeItem % num_channel_options);      // Zero Indexed: i.e., item 1 --> 0, item 2 --> 1, etc.
-
-  // Declare variable to track which menu_l element is highlighted
-  int activeItemLoopIndex;
-
-  // Determine the type of window 
-  if ((int)activeWindow < num_channel_options) {
-    // This is the main menu or a channel window.
-
-    // Print menu header
-    print_Menu_Header(channelNum, 0, 0);
-
-    // Assign activeItemLoopIndex
-    // (Based on main menu vs. channel menu)
-    if ((int)activeWindow) {
-      // Channel menu assignment
-
-      //Print menu window
-      print_Menu_Window(channels[channelNum - 1], (channelItemNum + OPTIONS_START_INDEX), OPTIONS_START_INDEX, std::size(menu_l));
-    }
-    else {
-      // Main menu assignment
-
-      //Print menu window
-      print_Menu_Window(0, ((int)activeItem - 1), 0, OPTIONS_START_INDEX);
-    }
-  }
-  else {
-    // This is a channel item window.
-
-    // Print menu header
-    print_Menu_Header(channelNum, (channelItemNum + 1), 1);
-
-    // Print Item Information
-    (*print_funcs[channelItemNum])(channelNum);
-
-  }
-}
-
 /*
 *     Prints the proper menu header
 */
-void print_Menu_Header(int channelNum, int itemNum, short subheader) {
+void print_Menu_Header(int channelNum, int itemNum, short subheader, String preSpace) {
+
+  // Reset the screen to load a new window
+  tft.fillScreen(TFT_WHITE);
+  tft.setCursor(x_default, y_default);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+
+  tft.setTextSize(1);
+  tft.println();
 
   // Declare and initialize the subheader item
   String subheader_str = menu_l[itemNum + (OPTIONS_START_INDEX - 1)];
@@ -900,7 +784,9 @@ void print_Menu_Header(int channelNum, int itemNum, short subheader) {
     subheader_str = "Stop";
   
   // Print the rest of the header
-  tft.println(" " + menu_l[((!channelNum) ? (std::size(menu_l) - 1) : channelNum - 1)]);  //Print the name of the channel
+  String menu_str(menu_l[((!channelNum) ? (std::size(menu_l) - 1) : channelNum - 1)]);
+  tft.setTextSize(4);
+  tft.println(preSpace + menu_str);  //Print the name of the channel
   if (subheader) {
     tft.setTextSize(3);
     tft.println("  " + subheader_str); // Print the channel's item
@@ -910,41 +796,26 @@ void print_Menu_Header(int channelNum, int itemNum, short subheader) {
   tft.setTextSize(3);
 }
 
-/*
-*     Prints the proper channel menu window
+/**
+*     Prints the proper menu window.
 */
-void print_Menu_Window(Pump_Channel *channel, int activeItemLoopIndex, int lStart, int lEnd) {
-      
-  String linePrint;
+void print_Menu_Window(int channelNum) {
 
-  // Print a smaller menu size for non-main menu windows.
-  if (lStart)
-    tft.setTextSize(2);
+  if (channelNum) {
+    // Channel menu window.
 
-  // Print each current menu option 
-  for (int i = lStart; i < lEnd; i++) {
-    
-    // Grab the item from the menu options
-    linePrint = menu_l[i];
-    if (channel && linePrint == "Start" && (*channel).pstat == PUMP_STATUS::RUNNING)
-      linePrint = "Stop";
-    else if (channel && linePrint == "Start" && (*channel).pstat == PUMP_STATUS::COMPLETE)
-      linePrint = "Reset";
-
-    // Check if the item is currently highlighted
-    if (activeItemLoopIndex == i) {
-      linePrint += " <";
-      tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
-    } else {
-      tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-    }
-
-    // Print the item 
-    tft.println(linePrint);
+    for (int i = 0; i < channel_b_size; i++) 
+      (*channel_b[i]).drawSmoothButton(false, 3, TFT_BLACK);
   }
+  else {
+    // Main menu window.
 
-  tft.setTextSize(3);
+    for (int i = 0; i < main_b_size; i++) 
+      (*main_b[i]).drawSmoothButton(false, 3, TFT_BLACK);
+
+  }
 }
+
 
 /* ---------- METHODS FOR PUMP CHANNEL PARAMETER RESOLUTION DISPLAY & CONFIGURATION---------- */
 
