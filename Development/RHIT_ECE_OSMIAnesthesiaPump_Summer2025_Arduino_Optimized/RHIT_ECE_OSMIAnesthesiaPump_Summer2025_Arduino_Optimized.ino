@@ -408,15 +408,6 @@ void init_LCD_Menu(void) {
 }
 
 /**
-*     Initializes the LCD Screen Touch functionality with provided calibration data.
-*/
-void init_Touch_Screen(void) {
-  // Use this calibration code in setup():
-  uint16_t calData[5] = { 355, 3461, 437, 3169, 7 };
-  tft.setTouch(calData);
-}
-
-/**
 *     Initializes the Auditory Alarm For Ending An Infusion
 */
 void init_Audio_Alarm(void) {

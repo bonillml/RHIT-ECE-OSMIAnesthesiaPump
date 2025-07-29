@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <TFT_eWidget.h>
+#include <FS.h>
 
 /*      Global Variables      */
 // Motor steps per revolution. Most steppers are 200 steps or 1.8 degrees/step
@@ -28,9 +29,10 @@
 // Step-Length (Steps per Centimeter)
 #define STEP_LENGTH STEP_ANGLE * ANGLE_LENGTH
 
+
 // Board time since previous touch button check
 unsigned long prevTouchTime = 0;
-unsigned long debounceTouch = 250;    // Keep larger than 250ms (Avg Human Reaction time)
+unsigned long debounceTouch = 125;    // Keep larger than 250ms (Avg Human Reaction time)
 
 // Board time since previous Rotary Encoder turn
 unsigned long prevTimeRE = 0;
@@ -76,6 +78,10 @@ TURN_DIR dirRE = TURN_DIR::STOP;
 // Define LCD Object
 TFT_eSPI tft = TFT_eSPI();
 
+#define CALIBRATION_FILE "/TouchCalData1"
+#define REPEAT_CAL false
+#define ROTATION 2
+
 // Define menu array and metadata
 /*
 *     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-:
@@ -84,13 +90,14 @@ TFT_eSPI tft = TFT_eSPI();
 *           - The very last element MUST BE the Main Menu item.
 *           - The names/Strings can be altered, but their placement in the array SHOULD remain the same. 
 *              - If modifying the order of the remaining elements, ensure the 'setup_item_funcs' and
-*                'update_item__funcs' function pointer arrays correspond to the correct number of menu items
+*                'update_item_funcs' function pointer arrays correspond to the correct number of menu items
 *                (i.e., num_channel_options - 1) and that the order of items in the 'menu_l' array 
 *                matches the order in the two pointer arrays.
 *           - The element locations are used to print the names of the menu items, thus allowing customization.
 *       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
 */
-char  *menu_l[11] = {"Channel 1", "Channel 2", "Channel 3", "Channel 4", "Dosage", "Infusion Rate", "Syringe Start", "Syringe End", "Calibrate", "Start", "Main Menu"};
+// TODO: Update to reflect actual actions
+char  *menu_l[9] = {"Channel 1", "Channel 2", "Channel 3", "Channel 4", "Dosage", "Infusion Rate", "Syringe Start", "Calibrate", "Main Menu"};
 #define OPTIONS_START_INDEX 4   // This can be thought of as the number of channels, or the index of the first menu item.
 short num_channel_options = std::size(menu_l) - OPTIONS_START_INDEX;
 
@@ -117,18 +124,15 @@ ButtonWidget thirdResBtn = ButtonWidget(&tft);
 ButtonWidget exitItemBtn = ButtonWidget(&tft);
 
 // Create arrays of button instances to utilize in print loops.
+// TODO: Update to reflect actual actions
 ButtonWidget* main_b[] = {&channel1Btn, &channel2Btn, &channel3Btn, &channel4Btn};
-ButtonWidget* channel_b[] = {&dosageBtn, &infusionRateBtn, &syringeStartBtn, &syringeEndBtn, &calibrateBtn, &startStopBtn, &mainMenuBtn};
+ButtonWidget* channel_b[] = {&dosageBtn, &infusionRateBtn, &syringeStartBtn, &calibrateBtn, &mainMenuBtn};
 ButtonWidget* item_b[] = {&firstResBtn, &secondResBtn, &thirdResBtn, &exitItemBtn};
 
 // Calculate the size of each array.
 uint8_t main_b_size = sizeof(main_b) / sizeof(main_b[0]);
 uint8_t channel_b_size = sizeof(channel_b) / sizeof(channel_b[0]);
 uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
-
-// Useful macro for calculating the height of buttons and spaces between buttons.
-#define BUTTON_WIDTH(num_buttons, total_height) ((0.75 * total_height) / (num_buttons))
-#define SPACE_WIDTH(num_buttons, total_height) ((0.25 * total_height) / (num_buttons + 1))
 
 // Define the various LCD pins (Found from User_Setup.h in the TFT_eSPI library folder)
 #define TFT_MISO 13
@@ -141,25 +145,16 @@ uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
 #define TOUCH_CS 3
 
 // Flags for certain mechanics
-short onChannelItem = 0;
 short startStop = 0;   // 0 - Exit, 1 - Start/Stop
 short curSWCount = 0;  // Tells Rotary Encoder when to switch menu windows
 short prevSWCount = 0; 
 int x_default = 0, y_default = 0;
 
-/*  Determines which channel the current menu window belongs to.
-*   
-*   Is used to pass in parameters to button functions.
-*/
-enum SELECTED_CHANNEL_WINDOW {
-  OTHER_MENU,
-  CHANNEL_1,
-  CHANNEL_2,
-  CHANNEL_3,
-  CHANNEL_4
-};
 // A variable to track which channel the current window belongs to.
-short activeChannel = (short)(SELECTED_CHANNEL_WINDOW::OTHER_MENU);
+short activeChannel = 0;
+
+// A variable to track which channel item the current window belongs to.
+short activeChannelItem = 0;
 
 /*  Determines the status of a pump channel
 *
@@ -215,13 +210,13 @@ Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpC
 */
 // Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
 void setup_Main_Menu(void) {
-  onChannelItem = 0;
+  activeChannelItem = 0;
   activeChannel = 0;
   print_Menu_Header(activeChannel, 0, 0, "  ");
   print_Menu_Window(activeChannel);
 }
 void setup_Channel_1(void) {
-  onChannelItem = 0;
+  activeChannelItem = 0;
   activeChannel = 1;
   if (activeChannel) {
     print_Menu_Header(activeChannel, 0, 0, "   ");
@@ -229,7 +224,7 @@ void setup_Channel_1(void) {
   }
 }
 void setup_Channel_2(void) {
-  onChannelItem = 0;
+  activeChannelItem = 0;
   activeChannel = 2;
   if (activeChannel) {
     print_Menu_Header(activeChannel, 0, 0, "   ");
@@ -237,7 +232,7 @@ void setup_Channel_2(void) {
   }
 }
 void setup_Channel_3(void) {
-  onChannelItem = 0;
+  activeChannelItem = 0;
   activeChannel = 3;
   if (activeChannel) {
     print_Menu_Header(activeChannel, 0, 0, "   ");
@@ -245,7 +240,7 @@ void setup_Channel_3(void) {
   }
 }
 void setup_Channel_4(void) {
-  onChannelItem = 0;
+  activeChannelItem = 0;
   activeChannel = 4;
   if (activeChannel) {
     print_Menu_Header(activeChannel, 0, 0, "   ");
@@ -256,64 +251,84 @@ void setup_Channel_4(void) {
 void (*setup_channel_funcs[])(void) = {setup_Channel_1, setup_Channel_2, setup_Channel_3, setup_Channel_4};
 
 // Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
-void update_Channel_Item_1(void) { if (activeChannel) set_Channel_Dosage(activeChannel); }
-void update_Channel_Item_2(void) { if (activeChannel) set_Channel_Infusion_Rate(activeChannel); }
-void update_Channel_Item_3(void) { if (activeChannel) set_Syringe_Start(activeChannel); }
-void update_Channel_Item_4(void) { if (activeChannel) set_Syringe_End(activeChannel); }
-void update_Channel_Item_5(void) { if (activeChannel && steppers.is_finished(activeChannel - 1)) calibrate_Stepper(activeChannel - 1); }
-void update_Channel_Item_6(void) { if (activeChannel) set_Start_Stop(activeChannel); }
+void update_Channel_Item_1(void) { 
+  if (activeChannel) 
+    set_Channel_Dosage(activeChannel); 
+}
+void update_Channel_Item_2(void) { 
+  if (activeChannel) 
+    set_Channel_Infusion_Rate(activeChannel); 
+}
+void update_Channel_Item_3(void) { 
+  if (activeChannel) 
+    set_Syringe_Start(activeChannel); 
+}
+void update_Channel_Item_4(void) { 
+  if (activeChannel) 
+    set_Syringe_End(activeChannel); 
+}
+void update_Channel_Item_5(void) { 
+  if (activeChannel && steppers.is_finished(activeChannel - 1)) 
+    calibrate_Stepper(activeChannel - 1); 
+}
+void update_Channel_Item_6(void) { 
+  if (activeChannel) 
+    set_Start_Stop(activeChannel); 
+}
 
-void (*update_item_funcs[])(void) = {update_Channel_Item_1, update_Channel_Item_2, update_Channel_Item_3, update_Channel_Item_4, update_Channel_Item_5, update_Channel_Item_6};
+// TODO: Update to reflect actual actions
+void (*update_item_funcs[])(void) = {update_Channel_Item_1, update_Channel_Item_2, update_Channel_Item_3, update_Channel_Item_5,};
 
 // Setup an array of pointers to various printing functions. Allows quick and structured access to printing methods.
 void setup_Channel_Item_1(void) { 
-  if (activeChannel && !onChannelItem) {
-    onChannelItem = 1;
+  if (activeChannel && !activeChannelItem) {
+    activeChannelItem = 1;
     print_Menu_Header(activeChannel, 1, 1, "   ");
     print_Channel_Dosage(activeChannel);
   } 
 }
 void setup_Channel_Item_2(void) { 
-  if (activeChannel && !onChannelItem) {
-    onChannelItem = 1;
+  if (activeChannel && !activeChannelItem) {
+    activeChannelItem = 2;
     print_Menu_Header(activeChannel, 2, 1, "   ");
     print_Channel_Infusion_Rate(activeChannel); 
   }
 }
 void setup_Channel_Item_3(void) { 
-  if (activeChannel && !onChannelItem) {
-    onChannelItem = 1;
+  if (activeChannel && !activeChannelItem) {
+    activeChannelItem = 3;
     print_Menu_Header(activeChannel, 3, 1, "   ");
     print_Syringe_Start(activeChannel); 
   }
 }
 void setup_Channel_Item_4(void) { 
-  if (activeChannel && !onChannelItem) {
-    onChannelItem = 1;
+  if (activeChannel && !activeChannelItem) {
+    activeChannelItem = 4;
     print_Menu_Header(activeChannel, 4, 1, "   ");
     print_Syringe_End(activeChannel); 
   }
 }
 void setup_Channel_Item_5(void) { 
-  if (activeChannel && !onChannelItem) {
-    onChannelItem = 1;
-    print_Menu_Header(activeChannel, 5, 1, "   ");
+  if (activeChannel && !activeChannelItem) {
+    activeChannelItem = 4;                              //TODO: Change to reflect actual channel item number.
+    print_Menu_Header(activeChannel, 4, 1, "   ");  //TODO: Change second parameter ('4') to reflect actual channel item number.
     print_Channel_Calibrate(activeChannel); 
   }
 }
 void setup_Channel_Item_6(void) { 
-  if (activeChannel && !onChannelItem) {
-    onChannelItem = 1;
+  if (activeChannel && !activeChannelItem) {
+    activeChannelItem = 6;
     print_Menu_Header(activeChannel, 6, 1, "   ");
     print_Start_Stop(activeChannel); 
   }
 }
 void setup_Channel_Item_MM(void) {
-  if (!onChannelItem)
+  if (activeChannel && !activeChannelItem)
     setup_Main_Menu();
 }
 
-void (*setup_item_funcs[])(void) = {setup_Channel_Item_1, setup_Channel_Item_2, setup_Channel_Item_3, setup_Channel_Item_4, setup_Channel_Item_5, setup_Channel_Item_6, setup_Channel_Item_MM};
+// TODO: Update to reflect actual actions
+void (*setup_item_funcs[])(void) = {setup_Channel_Item_1, setup_Channel_Item_2, setup_Channel_Item_3, setup_Channel_Item_5, setup_Channel_Item_MM};
 
 // Determines the actions to take given a touch occuring at coordinates x and y.
 void check_Touch_Buttons(void) {
@@ -323,17 +338,31 @@ void check_Touch_Buttons(void) {
   // Pressed will be set true if there is a valid touch on the screen
   bool pressed = tft.getTouch(&x, &y);
 
+  switch (ROTATION) {
+    case 0:
+      break;
+    case 1:
+      break;
+    case 2:
+      y = tft.height() - y;
+      break;
+    case 3:
+      break;
+    default:
+      break;
+  }
+
   if (activeChannel) {
     // Within a channel Menu
     for (int i = 0; i < channel_b_size; i++) {
       if (pressed) {
-        if (!onChannelItem && (*channel_b[i]).contains(y, tft.height() - x - 105)) {
+        if (!activeChannelItem && (*channel_b[i]).contains(x, y)) {
           (*channel_b[i]).press(true);
           (*channel_b[i]).pressAction();
           Serial.println("You pressed channel item button: " + String(i + 1));
           break;
         }
-        else if (onChannelItem) {
+        else if (activeChannelItem) {
           Serial.println("You clicked, but you're already on a channel item.");
           (*setup_channel_funcs[i])();
           break;
@@ -348,7 +377,7 @@ void check_Touch_Buttons(void) {
     // Within the Main Menu
     for (int i = 0; i < main_b_size; i++) {
       if (pressed) {
-        if ((*main_b[i]).contains(y, tft.height() - x - 70)) {
+        if ((*main_b[i]).contains(x, y)) {
           (*main_b[i]).press(true);
           (*main_b[i]).pressAction();
           Serial.println("You pressed channel button: " + String(i + 1));
@@ -398,9 +427,8 @@ void setup() {
     Serial.println("RTOS Timer Failed to Initialize");
 
   Serial.print("Booting Firmware on Core: " + String(xPortGetCoreID()) + "\n");
-  Serial.println("Optimized Software Booted");
+  Serial.println("Touch Software Booted");
 
-  Serial.println("Dimensions (" + String(tft.width()) + ", " + String(tft.height()) + ")");
   setup_Main_Menu();
 }
 
@@ -414,10 +442,76 @@ void loop() {
     prevTouchTime = millis();
     check_Touch_Buttons();
   }
-
+  
+  // Check to see if Rotary Encoder performed actions
+  re_Controller();
 }
 
 /* ---------- METHODS FOR INITIALIZING HARDWARE ---------- */
+
+void touch_calibrate() {
+  uint16_t calData[5];
+  uint8_t calDataOK = 0;
+
+  // check file system exists
+  if (!LittleFS.begin()) {
+    Serial.println("Formating file system");
+    LittleFS.format();
+    LittleFS.begin();
+  }
+
+  // check if calibration file exists and size is correct
+  if (LittleFS.exists(CALIBRATION_FILE)) {
+    if (REPEAT_CAL)
+    {
+      // Delete if we want to re-calibrate
+      LittleFS.remove(CALIBRATION_FILE);
+    }
+    else
+    {
+      fs::File f = LittleFS.open(CALIBRATION_FILE, "r");
+      if (f) {
+        if (f.readBytes((char *)calData, 14) == 14)
+          calDataOK = 1;
+        f.close();
+      }
+    }
+  }
+
+  if (calDataOK && !REPEAT_CAL) {
+    // calibration data valid
+    tft.setTouch(calData);
+  } else {
+    // data not valid so recalibrate
+    tft.fillScreen(TFT_BLACK);
+    tft.setCursor(20, 0);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+    tft.println("Touch corners as indicated");
+
+    tft.setTextFont(1);
+    tft.println();
+
+    if (REPEAT_CAL) {
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.println("Set REPEAT_CAL to false to stop this running again!");
+    }
+
+    tft.calibrateTouch(calData, TFT_MAGENTA, TFT_BLACK, 15);
+
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.println("Calibration complete!");
+
+    // store data
+    fs::File f = LittleFS.open(CALIBRATION_FILE, "w");
+    if (f) {
+      f.write((const unsigned char *)calData, 14);
+      f.close();
+    }
+  }
+}
 
 /**
 *   Initializes all four stepper motors
@@ -474,9 +568,10 @@ void init_Rotary_Encoder(void) {
 *     Initiallizes the LCD Screen and Menu
 */
 void init_LCD_Menu(void) {
-  tft.init();
-  tft.setRotation(2);
-  //init_Touch_Screen();
+  tft.begin();
+  tft.setRotation(ROTATION);
+  tft.fillScreen(TFT_WHITE);
+  init_Touch_Screen();
   init_Touch_Buttons();
 }
 
@@ -485,44 +580,45 @@ void init_LCD_Menu(void) {
 */
 void init_Touch_Screen(void) {
   // Use this calibration code in setup():
-  uint16_t calData[5] = { 355, 3461, 437, 3169, 7 };
-  tft.setTouch(calData);
+  touch_calibrate();
+  // uint16_t calData[5] = { 355, 3461, 437, 3169, 7 };
+  // tft.setTouch(calData);
 }
 
 /**
 *     Initializes the actions and graphics for the touch buttons.
 */
 void init_Touch_Buttons(void) {
-  Serial.println("Width: " + String(tft.width()) + " | Height: " + String(tft.height()));
 
-  uint16_t x = 70; // End of Menu Header
-  uint16_t y = tft.width() / 2;   // For centralized buttons
+  uint16_t x = tft.width() / 2;   // For centralizing buttons
+  uint16_t y = 40;                // Determines button layout
 
-  uint16_t buttonHeight = y;
+  uint16_t buttonWidth = x;
 
-  uint16_t buttonWidth = BUTTON_WIDTH(main_b_size, tft.height() - x);
-  uint16_t spaceWidth = SPACE_WIDTH(main_b_size, tft.height() - x);
-  x += (buttonWidth);
+  uint16_t buttonHeight = (uint16_t) get_Button_Height(main_b_size, tft.height() - y);
+  uint16_t spaceHeight = (uint16_t) get_Space_Height(main_b_size, tft.height() - y);
+  
+  y += (spaceHeight + (buttonHeight / 2));
 
   // Set the setup function for each main or channel menu button.
   for (int i = 0; i < main_b_size; i++) {
-    (*main_b[i]).initButton(y, x, buttonHeight, buttonWidth, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i], 1);
+    (*main_b[i]).initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i], 1);
     (*main_b[i]).setPressAction(*(setup_channel_funcs + i));
-    x += (buttonWidth + spaceWidth);
+    y += (spaceHeight + buttonHeight);
   } 
 
   // TODO: Complete this section of the channel setup.
-  x = 70;
+  y = 40;
 
-  buttonWidth = BUTTON_WIDTH(channel_b_size, tft.height() - x);
-  spaceWidth = SPACE_WIDTH(channel_b_size, tft.height() - x);
-  x += (buttonWidth);
+  buttonHeight = get_Button_Height(channel_b_size, tft.height() - y);
+  spaceHeight = get_Space_Height(channel_b_size, tft.height() - y);
+  y += (spaceHeight + (buttonHeight / 2));
 
   // Set the print function for each channel item button.
   for (int i = 0 ; i < channel_b_size; i++) {
-    (*channel_b[i]).initButton(y, x, buttonHeight, buttonWidth, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i + OPTIONS_START_INDEX], 1);
+    (*channel_b[i]).initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i + OPTIONS_START_INDEX], 1);
     (*channel_b[i]).setPressAction(*(setup_item_funcs + i));
-    x += (buttonWidth + spaceWidth);
+    y += (spaceHeight + buttonHeight);
   }
 }
 
@@ -661,8 +757,12 @@ void re_Controller(void) {
     if (curCountRE != prevCountRE) {
       dirRE = (curCountRE - prevCountRE > 0) ? TURN_DIR::CCW : TURN_DIR::CW;
 
-      // Because touch screen is implemented, there is no need
-      // to update the menu from the Rotary Encoder
+      // Determine if the Rotary Encoder has moved enough to warrant an action.
+      if (!(curCountRE % RE_SCROLL_COUNT)) {
+        
+        if (activeChannelItem)
+          (*update_item_funcs[activeChannelItem - 1])();
+      }
 
     }
     else {
@@ -768,6 +868,8 @@ int get_Active_Motor(void) {
 */
 void print_Menu_Header(int channelNum, int itemNum, short subheader, String preSpace) {
 
+  Serial.println("Printing Menu Header ");
+
   // Reset the screen to load a new window
   tft.fillScreen(TFT_WHITE);
   tft.setCursor(x_default, y_default);
@@ -784,7 +886,8 @@ void print_Menu_Header(int channelNum, int itemNum, short subheader, String preS
     subheader_str = "Stop";
   
   // Print the rest of the header
-  String menu_str(menu_l[((!channelNum) ? (std::size(menu_l) - 1) : channelNum - 1)]);
+  String menu_str = menu_l[((!channelNum) ? (std::size(menu_l) - 1) : channelNum - 1)];
+  Serial.println("Menu Item: " + menu_str);
   tft.setTextSize(4);
   tft.println(preSpace + menu_str);  //Print the name of the channel
   if (subheader) {
@@ -814,6 +917,20 @@ void print_Menu_Window(int channelNum) {
       (*main_b[i]).drawSmoothButton(false, 3, TFT_BLACK);
 
   }
+}
+
+/**
+*     Calculates the height of a window's buttons.
+*/
+double get_Button_Height(short numButtons, double totalHeight) {
+  return ((0.7 * totalHeight) / (numButtons));
+}
+
+/**
+*     Calculates the height of a window's spaces.
+*/
+double get_Space_Height(short numButtons, double totalHeight) {
+  return ((0.3 * totalHeight) / (numButtons + 1));
 }
 
 
@@ -1155,19 +1272,15 @@ void calibrate_Stepper(int motorNum) {
 */
 void print_Channel_Calibrate(int channelNum) {
 
-  tft.setTextSize(2);
-  tft.println("Rev/Turn: " + String(10.0 / (*channels[channelNum - 1]).rstat));
-  tft.println("CW -> Push");
-  tft.println("CCW -> Pull");
+  tft.setTextSize(3);
+  tft.println("Rev/Turn: " + String(10.0 / (*channels[channelNum - 1]).rstat) + "\n");
+  tft.println("Turn Knob:");
+  tft.println("- CW to Push");
+  tft.println("- CCW/ACW to Pull");
   tft.setTextSize(4);
   tft.println("-------------");
   tft.setTextSize(2);
-  tft.println("Scroll to Adjust");
   tft.println("");
-  if (!((*channels[channelNum - 1]).rstat % 1000))
-    tft.println("Click to Exit");
-  else
-    tft.println("Click to alter Rev/Turn");
   tft.setTextSize(3);
 }
 
