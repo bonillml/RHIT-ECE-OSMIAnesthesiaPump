@@ -4,6 +4,7 @@
 #include <TFT_eSPI.h>
 #include <TFT_eWidget.h>
 #include <FS.h>
+#include <HX711.h>
 
 /*      Global Variables      */
 // Motor steps per revolution. Most steppers are 200 steps or 1.8 degrees/step
@@ -390,7 +391,7 @@ void check_Touch_Buttons(void) {
   }
 }
 
-// Declare RTOS timer
+// Declare an RTOS timer for the stepper motor actions
 TimerHandle_t motorTimer;
 
 void motorTimerAction(TimerHandle_t xTimer) {
@@ -399,6 +400,23 @@ void motorTimerAction(TimerHandle_t xTimer) {
 
 /* TESTING AUDITORY INFUSION END ALARM */
 #define INF_END_ALM 8
+
+/* TESTING LOAD CELL */
+HX711 scale;
+#define LOAD_CELL_SCALE 852.924
+#define LOADCELL_DOUT_PIN 16
+#define LOADCELL_SCK_PIN  4
+
+void loadCellTask(void *args) {
+  // Read and print the load cell state if ready.
+
+  while (1) {
+    if (scale.is_ready()) {
+      Serial.println("Load Cell Weight: " + String(scale.get_units(5)));
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+}
 
 void setup() {
   // Allow the correct Serial Baud Rate
@@ -409,20 +427,7 @@ void setup() {
   init_Rotary_Encoder();
   init_LCD_Menu();
   init_Audio_Alarm();
-
-  // Set the default LCD cursor coordinate.
-  x_default = tft.getCursorX();
-  y_default = tft.getCursorY();
-
-  // Initialize the Stepper Motor timer
-  motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(1), pdTRUE, 0, motorTimerAction);
-
-  if (motorTimer) {
-    Serial.println("RTOS Timer Initialized");
-    xTimerStart(motorTimer, 0);
-  }
-  else
-    Serial.println("RTOS Timer Failed to Initialize");
+  init_Load_Cell();
 
   Serial.print("Booting Firmware on Core: " + String(xPortGetCoreID()) + "\n");
   Serial.println("Touch Software Booted");
@@ -433,6 +438,13 @@ void setup() {
 void loop() {
 
   update_All_Channels();
+
+  // Read and print the load cell state if ready.
+  // if (scale.is_ready()) {
+  //   scale.set_scale(LOAD_CELL_SCALE);
+  //   scale.tare();
+  //   Serial.println("Load Cell Weight: " + String(scale.get_units(10)));
+  // }
 
   // Scan keys every 50ms at most
   if (millis() - prevTouchTime >= debounceTouch) {
@@ -546,6 +558,16 @@ void init_Stepper_Motors(void) {
   pumpChannel2.pstat = PUMP_STATUS::IDLE;
   pumpChannel3.pstat = PUMP_STATUS::IDLE;
   pumpChannel4.pstat = PUMP_STATUS::IDLE;
+
+  // Initialize the Stepper Motor timer
+  motorTimer = xTimerCreate("MotorTimer", pdMS_TO_TICKS(1), pdTRUE, 0, motorTimerAction);
+
+  if (motorTimer) {
+    Serial.println("RTOS Motor Timer Initialized");
+    xTimerStart(motorTimer, 0);
+  }
+  else
+    Serial.println("RTOS Motor Timer Failed to Initialize");
 }
 
 /**
@@ -571,6 +593,10 @@ void init_LCD_Menu(void) {
   tft.fillScreen(TFT_WHITE);
   init_Touch_Screen();
   init_Touch_Buttons();
+
+  // Set the default LCD cursor coordinate.
+  x_default = tft.getCursorX();
+  y_default = tft.getCursorY();
 }
 
 /**
@@ -579,8 +605,6 @@ void init_LCD_Menu(void) {
 void init_Touch_Screen(void) {
   // Use this calibration code in setup():
   touch_calibrate();
-  // uint16_t calData[5] = { 355, 3461, 437, 3169, 7 };
-  // tft.setTouch(calData);
 }
 
 /**
@@ -634,6 +658,26 @@ void init_Touch_Buttons(void) {
 void init_Audio_Alarm(void) {
   pinMode(INF_END_ALM, OUTPUT);
   //digitalWrite(INF_END_ALM, LOW);
+}
+
+/**
+*     Initializes the Load Cell scale and scaling factor.
+*/
+void init_Load_Cell(void) {
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(LOAD_CELL_SCALE);
+  scale.tare();
+
+  // Initialize Load Cell Task
+  xTaskCreatePinnedToCore(
+    loadCellTask,     // Function for task to run
+    "LoadCellTask",   // Name of the task
+    4096,             // Stack size of the task
+    NULL,             // Parameters
+    1,                // Priority
+    NULL,             // Handler
+    1                 // Core for task to use
+  );
 }
 
 /* ---------- METHODS FOR INFUSION ALARM ---------- */
