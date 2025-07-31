@@ -82,58 +82,6 @@ TFT_eSPI tft = TFT_eSPI();
 #define REPEAT_CAL false
 #define ROTATION 2
 
-// Define menu array and metadata
-/*
-*     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-:
-*       *KEEP THE FIRST FOUR ELEMENTS (0-3) AS THE NAMES OF THE CHANNELS
-*       *KEEP THE LAST ELEMENTS (4-...) AS THE NAMES OF THE CHANNEL ITEMS
-*           - The very last element MUST BE the Main Menu item.
-*           - The names/Strings can be altered, but their placement in the array SHOULD remain the same. 
-*              - If modifying the order of the remaining elements, ensure the 'setup_item_funcs' and
-*                'update_item_funcs' function pointer arrays correspond to the correct number of menu items
-*                (i.e., num_channel_options - 1) and that the order of items in the 'menu_l' array 
-*                matches the order in the two pointer arrays.
-*           - The element locations are used to print the names of the menu items, thus allowing customization.
-*       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
-*/
-// TODO: Update to reflect actual actions
-char  *menu_l[9] = {"Channel 1", "Channel 2", "Channel 3", "Channel 4", "Dosage", "Infusion Rate", "Syringe Start", "Calibrate", "Main Menu"};
-#define OPTIONS_START_INDEX 4   // This can be thought of as the number of channels, or the index of the first menu item.
-short num_channel_options = std::size(menu_l) - OPTIONS_START_INDEX;
-
-// Define the button widgets
-// Buttons used within the main menu window;
-ButtonWidget channel1Btn = ButtonWidget(&tft);
-ButtonWidget channel2Btn = ButtonWidget(&tft);
-ButtonWidget channel3Btn = ButtonWidget(&tft);
-ButtonWidget channel4Btn = ButtonWidget(&tft);
-
-// Buttons used within a channel menu window.
-ButtonWidget dosageBtn = ButtonWidget(&tft);
-ButtonWidget infusionRateBtn = ButtonWidget(&tft);
-ButtonWidget syringeStartBtn = ButtonWidget(&tft);
-ButtonWidget syringeEndBtn = ButtonWidget(&tft);
-ButtonWidget calibrateBtn = ButtonWidget(&tft);
-ButtonWidget startStopBtn = ButtonWidget(&tft);
-ButtonWidget mainMenuBtn = ButtonWidget(&tft);
-
-// Buttons used within a channel item's window.
-ButtonWidget firstResBtn = ButtonWidget(&tft);
-ButtonWidget secondResBtn = ButtonWidget(&tft);
-ButtonWidget thirdResBtn = ButtonWidget(&tft);
-ButtonWidget exitItemBtn = ButtonWidget(&tft);
-
-// Create arrays of button instances to utilize in print loops.
-// TODO: Update to reflect actual actions
-ButtonWidget* main_b[] = {&channel1Btn, &channel2Btn, &channel3Btn, &channel4Btn};
-ButtonWidget* channel_b[] = {&dosageBtn, &infusionRateBtn, &syringeStartBtn, &calibrateBtn, &mainMenuBtn};
-ButtonWidget* item_b[] = {&firstResBtn, &secondResBtn, &thirdResBtn, &exitItemBtn};
-
-// Calculate the size of each array.
-uint8_t main_b_size = sizeof(main_b) / sizeof(main_b[0]);
-uint8_t channel_b_size = sizeof(channel_b) / sizeof(channel_b[0]);
-uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
-
 // Define the various LCD pins (Found from User_Setup.h in the TFT_eSPI library folder)
 #define TFT_MISO 13
 #define TFT_MOSI 11
@@ -200,7 +148,6 @@ typedef struct PumpChannel {
 Pump_Channel pumpChannel1, pumpChannel2, pumpChannel3, pumpChannel4;
 Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpChannel4};
 
-// Define function pointer arrays to allow quick menu item action and printing.
 /*
 *     -=-IMPORTANT NOTES FOR UPDATING (TODO) -=-:
 *           *THE SIZE OF BOTH ARRAYS SHOULD BE 'num_channel_options - 1' (i.e., all items but the main menu).
@@ -208,7 +155,30 @@ Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpC
 *                latter half of the 'menu_l' array.
 *       *DO NOT REMOVE THE 'TODO' FROM THIS SECTION, IT IDENTIFIES INSTRUCTIONS FOR OPEN-SOURCE UPDATING.
 */
-// Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
+
+// Define the structure for a Channel Item
+typedef struct ButtonItem {
+
+  char *label;
+  ButtonWidget btn = ButtonWidget(&tft);
+  void (*setup_func)() = NULL;
+  void (*update_func)() = NULL;
+
+  // Constructors for buttons with only setup functions.
+  ButtonItem(char *lbl, void (*setup)()) {
+    label = lbl;
+    setup_func = setup;
+  }
+
+  // Constructors for buttons with both setup and update functions.
+  ButtonItem(char *lbl, void (*setup)(), void (*update)()) {
+    label = lbl;
+    setup_func = setup;
+    update_func = update;
+  }
+
+}Button_Item;
+
 void setup_Main_Menu(void) {
   activeChannelItem = 0;
   activeChannel = 0;
@@ -248,9 +218,6 @@ void setup_Channel_4(void) {
   }
 }
 
-void (*setup_channel_funcs[])(void) = {setup_Channel_1, setup_Channel_2, setup_Channel_3, setup_Channel_4};
-
-// Setup an array of pointers to various setting functions. Allows quick and structured access to setting methods.
 void update_Channel_Item_1(void) { 
   if (activeChannel) 
     set_Channel_Dosage(activeChannel); 
@@ -276,10 +243,6 @@ void update_Channel_Item_6(void) {
     set_Start_Stop(activeChannel); 
 }
 
-// TODO: Update to reflect actual actions
-void (*update_item_funcs[])(void) = {update_Channel_Item_1, update_Channel_Item_2, update_Channel_Item_3, update_Channel_Item_5,};
-
-// Setup an array of pointers to various printing functions. Allows quick and structured access to printing methods.
 void setup_Channel_Item_1(void) { 
   if (activeChannel && !activeChannelItem) {
     activeChannelItem = 1;
@@ -310,8 +273,8 @@ void setup_Channel_Item_4(void) {
 }
 void setup_Channel_Item_5(void) { 
   if (activeChannel && !activeChannelItem) {
-    activeChannelItem = 4;                              //TODO: Change to reflect actual channel item number.
-    print_Menu_Header(activeChannel, 4, 1, "   ");  //TODO: Change second parameter ('4') to reflect actual channel item number.
+    activeChannelItem = 5;                              //TODO: Change to reflect actual channel item number.
+    print_Menu_Header(activeChannel, 5, 1, "   ");  //TODO: Change second parameter ('4') to reflect actual channel item number.
     print_Channel_Calibrate(activeChannel); 
   }
 }
@@ -327,8 +290,36 @@ void setup_Channel_Item_MM(void) {
     setup_Main_Menu();
 }
 
-// TODO: Update to reflect actual actions
-void (*setup_item_funcs[])(void) = {setup_Channel_Item_1, setup_Channel_Item_2, setup_Channel_Item_3, setup_Channel_Item_5, setup_Channel_Item_MM};
+// ButtonItem Stuctures used within the main menu window;
+Button_Item channel1BI("Channel 1", setup_Channel_1); 
+Button_Item channel2BI("Channel 2", setup_Channel_2); 
+Button_Item channel3BI("Channel 3", setup_Channel_3); 
+Button_Item channel4BI("Channel 4", setup_Channel_4); 
+
+// ButtonItem Structures used within a channel menu window.
+Button_Item dosageBI("Dosage", setup_Channel_Item_1, update_Channel_Item_1);
+Button_Item infusionRateBI("Infusion Rate", setup_Channel_Item_2, update_Channel_Item_2);
+Button_Item syringeStartBI("Syringe Start", setup_Channel_Item_3, update_Channel_Item_3);
+Button_Item syringeEndBI("Syringe End", setup_Channel_Item_4, update_Channel_Item_4);
+Button_Item calibrateBI("Calibrate", setup_Channel_Item_5, update_Channel_Item_5);
+Button_Item startStopBI("Start", setup_Channel_Item_6, update_Channel_Item_6);
+Button_Item mainMenuBI("Main Menu", setup_Channel_Item_MM);
+
+// ButtonItem Structures used within a channel item's window.
+// Button_Item firstResBI;
+// Button_Item secondResBI;
+// Button_Item thirdResBI;
+// Button_Item exitItemBI;
+
+// Create arrays of ButtonItem Structures
+Button_Item *main_b[] = {&channel1BI, &channel2BI, &channel3BI, &channel4BI};
+Button_Item *channel_b[] = {&dosageBI, &infusionRateBI, &syringeStartBI, &syringeEndBI, &calibrateBI, &startStopBI, &mainMenuBI};
+//Button_Item *item_b[] = {&firstResBI, &secondResBI, &thirdResBI, &exitItemBI};
+
+// Calculate the size of each array.
+uint8_t main_b_size = sizeof(main_b) / sizeof(main_b[0]);
+uint8_t channel_b_size = sizeof(channel_b) / sizeof(channel_b[0]);
+//uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
 
 // Determines the actions to take given a touch occuring at coordinates x and y.
 void check_Touch_Buttons(void) {
@@ -337,6 +328,8 @@ void check_Touch_Buttons(void) {
 
   // Pressed will be set true if there is a valid touch on the screen
   bool pressed = tft.getTouch(&x, &y);
+
+  Button_Item *BI = NULL;
 
   switch (ROTATION) {
     case 0:
@@ -355,37 +348,43 @@ void check_Touch_Buttons(void) {
   if (activeChannel) {
     // Within a channel Menu
     for (int i = 0; i < channel_b_size; i++) {
+
+      BI = channel_b[i];
+
       if (pressed) {
-        if (!activeChannelItem && (*channel_b[i]).contains(x, y)) {
-          (*channel_b[i]).press(true);
-          (*channel_b[i]).pressAction();
+        if (!activeChannelItem && (*BI).btn.contains(x, y)) {
+          (*BI).btn.press(true);
+          (*BI).btn.pressAction();
           Serial.println("You pressed channel item button: " + String(i + 1));
           break;
         }
         else if (activeChannelItem) {
           Serial.println("You clicked, but you're already on a channel item.");
-          (*setup_channel_funcs[i])();
+          (*main_b[activeChannel - 1]).setup_func();
           break;
         }
       }
       else {
-        (*channel_b[i]).press(false);
+        (*BI).btn.press(false);
       }
     }
   }
   else {
     // Within the Main Menu
     for (int i = 0; i < main_b_size; i++) {
+
+      BI = main_b[i];
+
       if (pressed) {
-        if ((*main_b[i]).contains(x, y)) {
-          (*main_b[i]).press(true);
-          (*main_b[i]).pressAction();
+        if ((*BI).btn.contains(x, y)) {
+          (*BI).btn.press(true);
+          (*BI).btn.pressAction();
           Serial.println("You pressed channel button: " + String(i + 1));
           break;
         }
       }
       else {
-        (*main_b[i]).press(false);
+        (*BI).btn.press(false);
       }
     }
   }
@@ -397,7 +396,6 @@ TimerHandle_t motorTimer;
 void motorTimerAction(TimerHandle_t xTimer) {
   steppers_do_tasks();
 }
-
 
 /* TESTING AUDITORY INFUSION END ALARM */
 #define INF_END_ALM 8
@@ -590,6 +588,8 @@ void init_Touch_Screen(void) {
 */
 void init_Touch_Buttons(void) {
 
+  Button_Item *BI = NULL;
+
   uint16_t x = tft.width() / 2;   // For centralizing buttons
   uint16_t y = 40;                // Determines button layout
 
@@ -602,8 +602,11 @@ void init_Touch_Buttons(void) {
 
   // Set the setup function for each main or channel menu button.
   for (int i = 0; i < main_b_size; i++) {
-    (*main_b[i]).initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i], 1);
-    (*main_b[i]).setPressAction(*(setup_channel_funcs + i));
+
+    BI = main_b[i];
+
+    (*BI).btn.initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, (*BI).label, 1);
+    (*BI).btn.setPressAction((*BI).setup_func);
     y += (spaceHeight + buttonHeight);
   } 
 
@@ -616,8 +619,11 @@ void init_Touch_Buttons(void) {
 
   // Set the print function for each channel item button.
   for (int i = 0 ; i < channel_b_size; i++) {
-    (*channel_b[i]).initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, menu_l[i + OPTIONS_START_INDEX], 1);
-    (*channel_b[i]).setPressAction(*(setup_item_funcs + i));
+
+    BI = channel_b[i];
+
+    (*BI).btn.initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, (*BI).label, 1);
+    (*BI).btn.setPressAction((*BI).setup_func);
     y += (spaceHeight + buttonHeight);
   }
 }
@@ -761,7 +767,7 @@ void re_Controller(void) {
       if (!(curCountRE % RE_SCROLL_COUNT)) {
         
         if (activeChannelItem)
-          (*update_item_funcs[activeChannelItem - 1])();
+          (*channel_b[activeChannelItem - 1]).update_func();
       }
 
     }
@@ -879,14 +885,16 @@ void print_Menu_Header(int channelNum, int itemNum, short subheader, String preS
   tft.println();
 
   // Declare and initialize the subheader item
-  String subheader_str = menu_l[itemNum + (OPTIONS_START_INDEX - 1)];
+  String subheader_str;
+  if (itemNum)
+    subheader_str = (*channel_b[itemNum - 1]).label;
 
   // If the subheader is "Start", but the motor is actually running, change it to "Stop"
   if (channelNum && (subheader_str == "Start") && (*channels[channelNum - 1]).pstat == PUMP_STATUS::RUNNING)
     subheader_str = "Stop";
   
   // Print the rest of the header
-  String menu_str = menu_l[((!channelNum) ? (std::size(menu_l) - 1) : channelNum - 1)];
+  String menu_str = (!channelNum) ? (*channel_b[channel_b_size - 1]).label : (*main_b[channelNum - 1]).label ;
   Serial.println("Menu Item: " + menu_str);
   tft.setTextSize(4);
   tft.println(preSpace + menu_str);  //Print the name of the channel
@@ -908,13 +916,13 @@ void print_Menu_Window(int channelNum) {
     // Channel menu window.
 
     for (int i = 0; i < channel_b_size; i++) 
-      (*channel_b[i]).drawSmoothButton(false, 3, TFT_BLACK);
+      (*channel_b[i]).btn.drawSmoothButton(false, 3, TFT_BLACK);
   }
   else {
     // Main menu window.
 
     for (int i = 0; i < main_b_size; i++) 
-      (*main_b[i]).drawSmoothButton(false, 3, TFT_BLACK);
+      (*main_b[i]).btn.drawSmoothButton(false, 3, TFT_BLACK);
 
   }
 }
@@ -1275,8 +1283,8 @@ void print_Channel_Calibrate(int channelNum) {
   tft.setTextSize(3);
   tft.println("Rev/Turn: " + String(10.0 / (*channels[channelNum - 1]).rstat) + "\n");
   tft.println("Turn Knob:");
-  tft.println("- CW to Push");
-  tft.println("- CCW/ACW to Pull");
+  tft.println(" - CW to Push");
+  tft.println(" - A/CCW to Pull");
   tft.setTextSize(4);
   tft.println("-------------");
   tft.setTextSize(2);
