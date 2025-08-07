@@ -125,8 +125,7 @@ enum PUMP_STATUS {
 enum RES_STATUS {
   ONES = 1,
   TENTHS = 10,
-  HUNDREDTHS = 100,
-  RES_DONE = 1000
+  HUNDREDTHS = 100
 };
 
 // Structure that will store each channel's configuration
@@ -135,10 +134,10 @@ typedef struct PumpChannel {
   unsigned short directionPin = 0;          // The direction pin number of this channel.
   PUMP_STATUS pstat = PUMP_STATUS::IDLE;    // The status of the pump channel.
   RES_STATUS rstat = RES_STATUS::ONES;      // The current resolution digit for inputs.
-  double dosage = 0.1;                      // The amount of medicine in either mL or mg/kg
-  double infusionRate = 60;              // The rate at which to pump the medcine in either mL/hr or mg/kg/hr
+  double dosage = 10.0;                      // The amount of medicine in either mL or mg/kg
+  double infusionRate = 5.0;              // The rate at which to pump the medcine in either mL/hr or mg/kg/hr
   double syringeStart = 10.0;               // The length marker on the track where the pump will start pushing the syringe.
-  double syringeEnd = 12.0;                 // The length marker on the tracker at which the syringe can no longer be pushed.
+  double syringeEnd = 15.0;                 // The length marker on the tracker at which the syringe can no longer be pushed.
   unsigned long stepCount = 0;              // The amount of steps this channel needs to take to complete its infusion.
   unsigned long stepDelay = 0;              // The amount of time needed between steps to ensure the correct infusion rate.
 
@@ -245,50 +244,78 @@ void update_Channel_Item_6(void) {
 }
 
 void setup_Channel_Item_1(void) { 
-  if (activeChannel && !activeChannelItem) {
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 1)) {
     activeChannelItem = 1;
     print_Menu_Header(activeChannel, 1, 1, "   ");
     print_Channel_Dosage(activeChannel);
   } 
 }
 void setup_Channel_Item_2(void) { 
-  if (activeChannel && !activeChannelItem) {
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 2)) {
     activeChannelItem = 2;
     print_Menu_Header(activeChannel, 2, 1, "   ");
     print_Channel_Infusion_Rate(activeChannel); 
   }
 }
 void setup_Channel_Item_3(void) { 
-  if (activeChannel && !activeChannelItem) {
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 3)) {
     activeChannelItem = 3;
     print_Menu_Header(activeChannel, 3, 1, "   ");
     print_Syringe_Start(activeChannel); 
   }
 }
 void setup_Channel_Item_4(void) { 
-  if (activeChannel && !activeChannelItem) {
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 4)) {
     activeChannelItem = 4;
     print_Menu_Header(activeChannel, 4, 1, "   ");
     print_Syringe_End(activeChannel); 
   }
 }
 void setup_Channel_Item_5(void) { 
-  if (activeChannel && !activeChannelItem) {
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 5)) {
     activeChannelItem = 5;                              //TODO: Change to reflect actual channel item number.
     print_Menu_Header(activeChannel, 5, 1, "   ");  //TODO: Change second parameter ('4') to reflect actual channel item number.
     print_Channel_Calibrate(activeChannel); 
   }
 }
 void setup_Channel_Item_6(void) { 
-  if (activeChannel && !activeChannelItem) {
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 6)) {
     activeChannelItem = 6;
     print_Menu_Header(activeChannel, 6, 1, "   ");
-    print_Start_Stop(activeChannel); 
+    print_Start_Stop(activeChannel, (*channels[activeChannel - 1]).resolutionCodes[0]); 
   }
 }
 void setup_Channel_Item_MM(void) {
   if (activeChannel && !activeChannelItem)
     setup_Main_Menu();
+}
+
+void cycle_Channel_Item_Resolution(void) {
+  if (activeChannel && activeChannelItem)
+    cycle_Channel_Resolution(activeChannel);
+}
+void retare_Channel_Item_Scale(void) {
+  retare_Scale();
+}
+void clear_Channel_Item_Value(void) {
+  if (activeChannel && activeChannelItem) 
+    clear_Channel_Resolution(activeChannel, activeChannelItem);
+}
+void start_Stop_Channel_Item(void) {
+  if (activeChannel && activeChannelItem)
+    begin_Start_Stop(activeChannel);
+    return;
+}
+void calculate_Channel_Item_Steps(void) {
+  if (activeChannel && activeChannelItem) {
+    calculate_Motor_Parameters(activeChannel);
+    setup_Channel_Item_6();
+    (*channels[activeChannel - 1]).resolutionCodes[0] = 0.0;
+  }
+}
+void exit_Channel_Item(void) {
+  if (activeChannel && activeChannelItem)
+    exit_Item_Window(activeChannel);
 }
 
 // ButtonItem Stuctures used within the main menu window;
@@ -307,20 +334,30 @@ Button_Item startStopBI("Start", setup_Channel_Item_6, update_Channel_Item_6);
 Button_Item mainMenuBI("Main Menu", setup_Channel_Item_MM);
 
 // ButtonItem Structures used within a channel item's window.
-// Button_Item firstResBI;
-// Button_Item secondResBI;
-// Button_Item thirdResBI;
-// Button_Item exitItemBI;
+Button_Item resolutionBI("Resolution", cycle_Channel_Item_Resolution);
+Button_Item tareLoadCellBI("Re-Scale", retare_Channel_Item_Scale);
+Button_Item clearItemBI("Clear", clear_Channel_Item_Value);
+Button_Item startStopMotorBI("Start-Stop", start_Stop_Channel_Item);
+Button_Item calculateStepsBI("Calculate", calculate_Channel_Item_Steps);
+Button_Item exitItemBI("Exit Page", exit_Channel_Item);
 
 // Create arrays of ButtonItem Structures
 Button_Item *main_b[] = {&channel1BI, &channel2BI, &channel3BI, &channel4BI};
 Button_Item *channel_b[] = {&dosageBI, &infusionRateBI, &syringeStartBI, &syringeEndBI, &calibrateBI, &startStopBI, &mainMenuBI};
-//Button_Item *item_b[] = {&firstResBI, &secondResBI, &thirdResBI, &exitItemBI};
+Button_Item *item_b[][3] = {
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Dosage Page
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Infusion Rate Page
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Syringe Start Page
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Syringe End Page
+                           {&resolutionBI, &tareLoadCellBI, &exitItemBI},       // Calibrate Page
+                           {&startStopMotorBI, &calculateStepsBI, &exitItemBI}, // Start/Stop Page
+                          };
 
 // Calculate the size of each array.
 uint8_t main_b_size = sizeof(main_b) / sizeof(main_b[0]);
 uint8_t channel_b_size = sizeof(channel_b) / sizeof(channel_b[0]);
-//uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
+uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
+uint8_t item_bl_size = 3;
 
 // Determines the actions to take given a touch occuring at coordinates x and y.
 void check_Touch_Buttons(void) {
@@ -346,22 +383,36 @@ void check_Touch_Buttons(void) {
       break;
   }
 
-  if (activeChannel) {
+  if (activeChannel && !activeChannelItem) {
     // Within a channel Menu
     for (int i = 0; i < channel_b_size; i++) {
 
       BI = channel_b[i];
 
       if (pressed) {
-        if (!activeChannelItem && (*BI).btn.contains(x, y)) {
+        if ((*BI).btn.contains(x, y)) {
           (*BI).btn.press(true);
           (*BI).btn.pressAction();
           Serial.println("You pressed channel item button: " + String(i + 1));
           break;
         }
-        else if (activeChannelItem) {
-          Serial.println("You clicked, but you're already on a channel item.");
-          (*main_b[activeChannel - 1]).setup_func();
+      }
+      else {
+        (*BI).btn.press(false);
+      }
+    }
+  }
+  else if (activeChannel && activeChannelItem) {
+    // Within a channel item window.
+    for (int i = 0; i < item_bl_size; i++) {
+
+      BI = item_b[activeChannelItem - 1][i];
+
+      if (pressed) {
+        if ((*BI).btn.contains(x, y)) {
+          (*BI).btn.press(true);
+          (*BI).btn.pressAction();
+          Serial.println("You pressed on a button in a channel item page.");
           break;
         }
       }
@@ -403,16 +454,18 @@ void motorTimerAction(TimerHandle_t xTimer) {
 
 /* TESTING LOAD CELL */
 HX711 scale;
-#define LOAD_CELL_SCALE 852.924
+#define LOADCELL_SCALE    6039.245 //12078.49 //852.924
+#define LOADCELL_AVG_TAKE 1
 #define LOADCELL_DOUT_PIN 16
 #define LOADCELL_SCK_PIN  4
 
+TaskHandle_t loadCellTaskHandle = NULL;
 void loadCellTask(void *args) {
   // Read and print the load cell state if ready.
 
   while (1) {
     if (scale.is_ready()) {
-      Serial.println("Load Cell Weight: " + String(scale.get_units(5)));
+      Serial.println("Load Cell Weight: " + String(scale.get_units(LOADCELL_AVG_TAKE)));
     }
     vTaskDelay(pdMS_TO_TICKS(200));
   }
@@ -438,13 +491,6 @@ void setup() {
 void loop() {
 
   update_All_Channels();
-
-  // Read and print the load cell state if ready.
-  // if (scale.is_ready()) {
-  //   scale.set_scale(LOAD_CELL_SCALE);
-  //   scale.tare();
-  //   Serial.println("Load Cell Weight: " + String(scale.get_units(10)));
-  // }
 
   // Scan keys every 50ms at most
   if (millis() - prevTouchTime >= debounceTouch) {
@@ -634,7 +680,7 @@ void init_Touch_Buttons(void) {
     y += (spaceHeight + buttonHeight);
   } 
 
-  // TODO: Complete this section of the channel setup.
+  // Return y-positioning to the beginning location.
   y = 40;
 
   buttonHeight = get_Button_Height(channel_b_size, tft.height() - y);
@@ -642,13 +688,32 @@ void init_Touch_Buttons(void) {
   y += (spaceHeight + (buttonHeight / 2));
 
   // Set the print function for each channel item button.
-  for (int i = 0 ; i < channel_b_size; i++) {
+  for (int i = 0; i < channel_b_size; i++) {
 
     BI = channel_b[i];
 
     (*BI).btn.initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, (*BI).label, 1);
     (*BI).btn.setPressAction((*BI).setup_func);
     y += (spaceHeight + buttonHeight);
+  }
+
+  // Set the print function for each channel item button.
+  for (int i = 0; i < item_b_size; i++) {
+
+    // Return y-positioning to the beginning location.
+    y = 240;
+
+    buttonHeight = get_Button_Height(item_bl_size, tft.height() - y);
+    spaceHeight = get_Space_Height(item_bl_size, tft.height() - y);
+    y += (spaceHeight + (buttonHeight / 2));
+
+    for (int j = 0; j < item_bl_size; j++) {
+      BI = item_b[i][j];
+
+      (*BI).btn.initButton(x, y, buttonWidth, buttonHeight, TFT_BLACK, TFT_SKYBLUE, TFT_BLACK, (*BI).label, 1);
+      (*BI).btn.setPressAction((*BI).setup_func);
+      y += (spaceHeight + buttonHeight);
+    }
   }
 }
 
@@ -657,7 +722,6 @@ void init_Touch_Buttons(void) {
 */
 void init_Audio_Alarm(void) {
   pinMode(INF_END_ALM, OUTPUT);
-  //digitalWrite(INF_END_ALM, LOW);
 }
 
 /**
@@ -665,18 +729,18 @@ void init_Audio_Alarm(void) {
 */
 void init_Load_Cell(void) {
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  scale.set_scale(LOAD_CELL_SCALE);
+  scale.set_scale(LOADCELL_SCALE);
   scale.tare();
 
   // Initialize Load Cell Task
   xTaskCreatePinnedToCore(
-    loadCellTask,     // Function for task to run
-    "LoadCellTask",   // Name of the task
-    4096,             // Stack size of the task
-    NULL,             // Parameters
-    1,                // Priority
-    NULL,             // Handler
-    1                 // Core for task to use
+    loadCellTask,         // Function for task to run
+    "LoadCellTask",       // Name of the task
+    4096,                 // Stack size of the task
+    NULL,                 // Parameters
+    1,                    // Priority
+    &loadCellTaskHandle,   // Handler
+    1                     // Core for task to use
   );
 }
 
@@ -689,6 +753,18 @@ void alarm_Start(void) {
 
 void alarm_End(void) {
   noTone(INF_END_ALM);
+}
+
+/* ---------- METHODS FOR LOAD CELL ---------- */
+
+/**
+*    Re-tares the load cell scale.
+*/
+void retare_Scale(void) {
+  vTaskSuspend(loadCellTaskHandle); // Suspend the task
+  scale.set_scale(LOADCELL_SCALE);
+  scale.tare();
+  vTaskResume(loadCellTaskHandle);  // Resume the task
 }
 
 /* ---------- METHODS FOR PUMP CHANNEL INFORMATION ---------- */
@@ -810,8 +886,12 @@ void re_Controller(void) {
       // Determine if the Rotary Encoder has moved enough to warrant an action.
       if (!(curCountRE % RE_SCROLL_COUNT)) {
         
-        if (activeChannelItem)
+        if (activeChannelItem) {
+          Serial.println("Performing Action Item " + String(activeChannelItem));
           (*channel_b[activeChannelItem - 1]).update_func();
+          if (activeChannelItem != 5)
+            (*channel_b[activeChannelItem - 1]).setup_func();
+        }
       }
 
     }
@@ -972,6 +1052,36 @@ void print_Menu_Window(int channelNum) {
 }
 
 /**
+*     Prints the respective channel item buttons.
+*/
+void print_Item_Buttons(int channelNum, int activeChannelItem) {
+
+  Button_Item *BI;
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  for (int i = 0; i < item_bl_size; i++) {
+
+    BI = item_b[activeChannelItem - 1][i];
+
+    // Update the Resolution Button's text depending on current resolution settings.
+    if (!strcmp((*BI).label, "Resolution")) {
+      String resName = "Res: " + String((*channel).rstat);
+      (*BI).btn.drawSmoothButton(false, 3, TFT_BLACK, resName);
+    }
+    else
+      (*BI).btn.drawSmoothButton(false, 3, TFT_BLACK);
+  }
+}
+
+/**
+*     Exits a channel item's page.
+*/
+void exit_Item_Window(int channelNum) {
+  (*channels[channelNum - 1]).rstat = RES_STATUS::ONES;
+  (*main_b[channelNum - 1]).setup_func();
+}
+
+/**
 *     Calculates the height of a window's buttons.
 */
 double get_Button_Height(short numButtons, double totalHeight) {
@@ -987,6 +1097,51 @@ double get_Space_Height(short numButtons, double totalHeight) {
 
 
 /* ---------- METHODS FOR PUMP CHANNEL PARAMETER RESOLUTION DISPLAY & CONFIGURATION---------- */
+
+/**
+*     Cycles a pump channel's resolution.
+*/
+void cycle_Channel_Resolution(short channelNum) {
+
+  // Retrieve correct pump
+  Pump_Channel *channel = channels[channelNum - 1];
+
+  if ((*channel).rstat == RES_STATUS::HUNDREDTHS) {
+    (*channel).rstat = RES_STATUS::ONES;
+  }
+  else 
+    (*channel).rstat = (RES_STATUS)(10 * (int)((*channel).rstat));
+
+  (*channel_b[activeChannelItem - 1]).setup_func();
+}
+
+/**
+*     Clears a pump channel's resolution value.
+*/
+void clear_Channel_Resolution(short channelNum, short channelItemNum) {
+    
+    // Retreive the correc pump channel.
+    Pump_Channel *channel = channels[channelNum - 1];
+
+    switch (channelItemNum) {
+      case 1:
+        (*channel).dosage = 0.0;
+        break;
+      case 2:
+        (*channel).infusionRate = 0.0;
+        break;
+      case 3:
+        (*channel).syringeStart = 0.0;
+        break;
+      case 4:
+        (*channel).syringeEnd = 0.0;
+        break;
+      default:
+        break;
+    }
+
+  (*channel_b[channelItemNum - 1]).setup_func();
+}
 
 /**
 *     Sets the proper parameter resolution setting.
@@ -1032,102 +1187,82 @@ void print_Resolution_Setting(RES_STATUS channelRes, String name, double param, 
   RES_STATUS print_res = RES_STATUS::ONES;
   String resStr = String(param);
 
-  if (channelRes % 1000) {
-    tft.print(preSpace);
-    for (int i = 0; resStr[i] != '\0'; i++) {
-      if (resStr[i] == '.') {
-        print_res = (RES_STATUS)((int)print_res * 10);
-        tft.print(resStr[i]);
-      }
-      else if (print_res == channelRes) {
-        tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
-        tft.print(resStr[i]);
-        tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-      }
-      else {
-        tft.print(resStr[i]);
-      }
-
-      if (resStr[i - 1] == '.') {
-        print_res = (RES_STATUS)((int)print_res * 10);
-      }
+  tft.print(preSpace);
+  for (int i = 0; resStr[i] != '\0'; i++) {
+    if (resStr[i] == '.') {
+      print_res = (RES_STATUS)((int)print_res * 10);
+      tft.print(resStr[i]);
     }
-    tft.print(" " + units + "\n");
-
-    tft.setTextSize(2);
-    switch(channelRes) {
-      case RES_STATUS::ONES:
-        tft.println("   Editing Ones Place");
-        break;
-      case RES_STATUS::TENTHS:
-        tft.println("  Editing Tenths Place");
-        break;
-      default:
-        tft.println(" Editing Hundreths Place");
-        break;
-    } 
-    tft.setTextSize(4);
-    tft.println("-------------");
-    tft.setTextSize(2);
-    tft.println("Scroll to Adjust");
-    switch(channelRes) {
-      case RES_STATUS::ONES:
-        tft.println("Click to Tenths");
-        break;
-      case RES_STATUS::TENTHS:
-        tft.println("Click to Hundreths");
-        break;
-      default:
-        tft.println("Click to Finish");
-        break;
+    else if (print_res == channelRes) {
+      tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
+      tft.print(resStr[i]);
+      tft.setTextColor(TFT_BLACK, TFT_WHITE);
     }
-    
-    // If there is an outOfBounds flag pointer, print accordingly
-    if (outOfBounds[0]) {
-
-      switch((int)outOfBounds[0]) {
-
-        case 2:   // Concurrent modification error
-          tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-          tft.println("ERROR: Cannot change\nvalue while motor is running.");
-          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-          break;
-
-        case 1:   // Out of upper bounds errors
-          tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-          if (name != "Start")
-            tft.println("ERROR: Cannot exceed\nupper bound of " + String(outOfBounds[1]) + units);
-          else
-            tft.println("ERROR: Cannot exceed\nSyringe End of " + String(outOfBounds[1]) + units);
-          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-          break;
-
-        case -1:   // Out of lower bounds errors
-          tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-          if (name != "End")
-            tft.println("ERROR: Cannot exceed\nlowerbound of " + String(outOfBounds[1]) + units);
-          else
-            tft.println("ERROR: Cannot exceed\nSyringe Start of " + String(outOfBounds[1]) + units);
-          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-          break;
-        default:    // Unknown error
-          tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-          tft.println("ERROR: Unknown exception thrown.");
-          tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-          break;
-      }
+    else {
+      tft.print(resStr[i]);
     }
 
-    tft.setTextSize(3); 
+    if (resStr[i - 1] == '.') {
+      print_res = (RES_STATUS)((int)print_res * 10);
+    }
   }
-  else {
-    tft.println("New " + name + " Set:");
-    tft.println(preSpace + "" + String(param) + " " + units + "\n");
-    tft.setTextSize(4);
-    tft.println("-------------");
-    tft.setTextSize(3);
-    tft.println("Click to Exit");
+  tft.print(" " + units + "\n");
+
+  tft.setTextSize(2);
+  switch(channelRes) {
+    case RES_STATUS::ONES:
+      tft.println("   Editing Ones Place");
+      break;
+    case RES_STATUS::TENTHS:
+      tft.println("  Editing Tenths Place");
+      break;
+    default:
+      tft.println(" Editing Hundreths Place");
+      break;
+  } 
+  tft.setTextSize(4);
+  tft.println("-------------");
+  tft.setTextSize(2);
+
+  // If there is an outOfBounds flag pointer, print accordingly
+  if (outOfBounds[0]) {
+
+    switch((int)outOfBounds[0]) {
+
+      case 2:   // Concurrent modification error
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.println("ERROR: Cannot change\nvalue while motor is running.");
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        break;
+
+      case 1:   // Out of upper bounds errors
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        if (name != "Start")
+          tft.println("ERROR: Cannot exceed\nupper bound of " + String(outOfBounds[1]) + units);
+        else
+          tft.println("ERROR: Cannot exceed\nSyringe End of " + String(outOfBounds[1]) + units);
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        break;
+
+      case -1:   // Out of lower bounds errors
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        if (name != "End")
+          tft.println("ERROR: Cannot exceed\nlowerbound of " + String(outOfBounds[1]) + units);
+        else
+          tft.println("ERROR: Cannot exceed\nSyringe Start of " + String(outOfBounds[1]) + units);
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        break;
+      default:    // Unknown error
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.println("ERROR: Unknown exception thrown.");
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        break;
+    }
   }
+
+  print_Item_Buttons(activeChannel, activeChannelItem);
+
+  tft.setTextSize(3); 
 }
 
 /**
@@ -1306,7 +1441,7 @@ void calibrate_Stepper(int motorNum) {
     if (steppers.is_finished(motorNum)) {
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
       set_Stepper_Motor_Direction(channel, TURN_DIR::CCW);
-      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS * mult, 100);
+      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS * mult, 50);
     }
   }
   else if (dirRE == TURN_DIR::CW) { 
@@ -1314,7 +1449,7 @@ void calibrate_Stepper(int motorNum) {
     if (steppers.is_finished(motorNum)) {
       (*channel).pstat = PUMP_STATUS::CALIBRATE;
       set_Stepper_Motor_Direction(channel, TURN_DIR::CW);
-      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS * mult, 100);
+      activate_Stepper_Motor(motorNum, MOTOR_STEPS * MICROSTEPS * mult, 50);
     }
   }
 }
@@ -1334,6 +1469,8 @@ void print_Channel_Calibrate(int channelNum) {
   tft.setTextSize(2);
   tft.println("");
   tft.setTextSize(3);
+
+  print_Item_Buttons(channelNum, activeChannelItem);
 }
 
 /* ---------- METHODS FOR PUMP CHANNEL START/STOP ACTIONS ---------- */
@@ -1402,6 +1539,10 @@ void calculate_Motor_Parameters(int channelNum) {
 
   Pump_Channel *channel = channels[channelNum - 1];
 
+  if ((*channel).pstat == PUMP_STATUS::RUNNING) {
+    (*channel).resolutionCodes[0] = 1.0;
+    return;
+  }
   // Determine the number of steps to achieve the pump distance
   (*channel).stepCount = ((*channel).syringeEnd - (*channel).syringeStart)*(STEP_LENGTH);
 
@@ -1414,9 +1555,6 @@ void calculate_Motor_Parameters(int channelNum) {
   
   // Step delay
   (*channel).stepDelay = (totalTime) / ((*channel).stepCount - 1);
-
-  //Serial.println("Motor " + String(channelNum) + " | Dosage: " + String((*channel).dosage) + " | Rate: " + String((*channel).infusionRate));
-  //Serial.println("Motor " + String(channelNum) + " | Steps: " + String((*channel).stepCount) + " | Delay [us]: " + String((*channel).stepDelay));
 }
 
 /**
@@ -1433,7 +1571,7 @@ void set_Start_Stop(int channelNum) {
 /**
 *     Print the Start/Stop information and instructions.
 */
-void print_Start_Stop(int channelNum) {
+void print_Start_Stop(int channelNum, double errorCode) {
 
   Pump_Channel *channel = channels[channelNum - 1];
 
@@ -1442,31 +1580,13 @@ void print_Start_Stop(int channelNum) {
   String c_stat;      // The current status of the motor
   String temp_str;
 
-  // TODO: Test if removing libray-dependent condition works
-  if (steppers.is_running(channelNum - 1)) {
-
+  // Determine the motor's current status. 
+  if (steppers.is_running(channelNum - 1)) 
     c_stat = "Running";
-    re_action = "Stop";
-  }
-  else if ((*channel).pstat == PUMP_STATUS::COMPLETE) {
+  else if ((*channel).pstat == PUMP_STATUS::COMPLETE)
     c_stat = "Complete";
-    re_action = "Reset";
-  }
-  else {
+  else
     c_stat = "Stopped";
-    re_action = "Start";
-  }
-
-  // If startStop = 0, then the main option is EXIT
-  // Otherwise, startStop = 1, the the main option is either START or STOP.
-  if (!startStop) {
-    cur_action = "Exit";
-  }
-  else {
-    temp_str = cur_action;
-    cur_action = re_action;
-    re_action = temp_str;
-  }
 
   tft.println(" " + String((*channel).stepCount));
   tft.println("   Steps Left");
@@ -1475,11 +1595,23 @@ void print_Start_Stop(int channelNum) {
   tft.setTextSize(4);
   tft.println("-------------");
   tft.setTextSize(2);
-  tft.print("Current Action: ");
-  tft.setTextColor(TFT_BLACK, TFT_SKYBLUE);
-  tft.println(cur_action);
-  tft.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-  tft.println("Scroll to " + re_action);
-  tft.println("Click to Confirm");
+  /*
+   *    Displays error code information.
+   *    
+   *    0 - No error 
+   *    1 - Attempted value re-calculation during running.
+   */
+  switch ((int)errorCode) {
+    case 1:
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.println("ERROR: Cannot calculate\nsteps while motor is running.");
+      tft.setTextColor(TFT_BLACK, TFT_WHITE);
+      break;
+    default:
+      break;
+  }
+
   tft.setTextSize(3);
+
+  print_Item_Buttons(channelNum, activeChannelItem);
 }
