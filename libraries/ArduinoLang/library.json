@@ -1,0 +1,22 @@
+{
+  "name":"ArduinoLang",
+  "description":"Translating Wiring and C++ reserved words language to something different than English",
+  "keywords":"arduino, wiring, cpp, language, translation, translator",
+  "authors":
+    [
+      {
+          "name": "Jeferson Lima",
+          "email": "jefersonlimaa@dcc.ufba.br",
+          "url": "http://jefersonla.github.io",
+          "maintainer": true
+      }
+    ],
+  "repository":
+    {
+      "type": "git",
+      "url": "https://github.com/jefersonla/ArduinoLang.git"
+    },
+  "frameworks": "arduino",
+  "platforms": "atmelavr"
+}
+
