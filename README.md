@@ -1,5 +1,19 @@
 # Open-Source Medical Infusion Anesthesia Pump
 
+# Table of Contents
+1. Important Data Structures
+    1. PumpChannel / Pump_Channel
+        1. PUMP_STATUS
+        2. RES_STATUS
+        3. resolutionCodes
+    2. ButtonItem / Button_Item
+        1. ButtonWidget
+        2. Setup Functions
+        3. Update Functions
+
+
+
+
 ## Important Data Structures
 
 ### PumpChannel / Pump_Channel
@@ -77,11 +91,11 @@ The resolution codes of a channel act as a place where page setup and page print
 
 ### ButtonItem / Button_Item
 
+#### ButtonWidget
+
 #### Setup Functions
 
 #### Update Functions
-
-####
 
 
 
