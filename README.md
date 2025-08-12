@@ -31,11 +31,11 @@ Pump_Channel *channels[4] = {&pumpChannel1, &pumpChannel2, &pumpChannel3, &pumpC
 The user-inputted parameters--with focus on infusion rate, syringe start, and syringe end--will likely be re-named or swapped for other parameters as the client or user sees fit. One prominant instance would be swapping infusion rate with patient weight. Alterations like these can be easily done via the following steps:
 1. Update the corresponding element in the Pump_Channel struct.
 2. Update the corresponding Button_Item data structures. (detailed in a **ButtonItem / Button_Item**)
-  a. Alter the label in the respective Button_Item's declaration.
-  b. Alter the user-inputted paramter's row in item_b[][] matrix.
-  c. Alter the functionality of the Button_Item's setup and update functions. 
+  1. Alter the label in the respective Button_Item's declaration.
+  2. Alter the user-inputted paramter's row in item_b[][] matrix.
+  3. Alter the functionality of the Button_Item's setup and update functions. 
 3. Update the corresponding page setup and page print functions near the bottom of the "RHIT_ECE_OSMIAnesthesiaPump_Summer2025_Arduino_Touch".
-  a. These page setup and page print functions may relate to a Button_Item's setup and update function.
+  1. These page setup and page print functions may relate to a Button_Item's setup and update function.
 
 #### PUMP_STATUS
 The PUMP_STATUS of a channel tracks the state or mode of a pump. Depending on the state, the PUMP_STATUS promotes or prevents various actions of the pump channel. These various actions are found within the page setup and page print functions mentioned in the Button_Items' setup and update functions. The declaration of the enumeration can be found as so:
