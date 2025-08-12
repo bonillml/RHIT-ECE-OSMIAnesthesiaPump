@@ -37,9 +37,6 @@ The user-inputted parameters--with focus on infusion rate, syringe start, and sy
 3. Update the corresponding page setup and page print functions near the bottom of the "RHIT_ECE_OSMIAnesthesiaPump_Summer2025_Arduino_Touch".
   a. These page setup and page print functions may relate to a Button_Item's setup and update function.
 
-#### resolutionCodes
-The resolution codes of a channel act as a place where page setup and page print functions can send return codes and receive error codes. Return codes are primarily implemented to pass information to error messages and error codes are primary implemented to print correct error codes. Dominant errors include user-inputted parameters attempting to update beyond set boundaries. Because the resolution codes fall in a two-element array (resolutionCodes[2]), the first element is dedicated to the error code and the second element is dedicated to the return code or other passed information.
-
 #### PUMP_STATUS
 The PUMP_STATUS of a channel tracks the state or mode of a pump. Depending on the state, the PUMP_STATUS promotes or prevents various actions of the pump channel. These various actions are found within the page setup and page print functions mentioned in the Button_Items' setup and update functions. The declaration of the enumeration can be found as so:
 
@@ -75,6 +72,8 @@ enum RES_STATUS {
 };
 ```
 
+#### resolutionCodes
+The resolution codes of a channel act as a place where page setup and page print functions can send return codes and receive error codes. Return codes are primarily implemented to pass information to error messages and error codes are primary implemented to print correct error codes. Dominant errors include user-inputted parameters attempting to update beyond set boundaries. Because the resolution codes fall in a two-element array (resolutionCodes[2]), the first element is dedicated to the error code and the second element is dedicated to the return code or other passed information.
 
 ### ButtonItem / Button_Item
 
