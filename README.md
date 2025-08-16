@@ -192,7 +192,7 @@ void cycle_Channel_Item_Resolution(void) {
 ```
 
 #### Update Functions
-On the other hand, Update Functions are rotary encoder-enforced functions that relate to a Button_Item's respective menu page. To recount, Update Functions are not called when their Button_Item's ButtonWidget is pressed. They are called upon in the `re_Controller()` function when the user is in a valid channel item menu page and the software detects a large enough turn of the rotary encoder. Here is the following code within the `re_Controller()` function that calls the Update Functions:
+On the other hand, Update Functions are rotary encoder-enforced functions that relate to a Button_Item's respective menu page. To recount, Update Functions are not called when their Button_Item's ButtonWidget is pressed. They are called upon in the `re_Controller()` function when the user is in a valid channel item menu page and the software detects a large enough turn of the rotary encoder. For further context, the code within the `re_Controller()` function below calls both the Update Function and then a Setup Function; the Setup Function is called as a menu page refresh. 
 
 ```C++
 // ... Other re_Controller() code
@@ -210,9 +210,11 @@ if (!(curCountRE % RE_SCROLL_COUNT)) {
 // ... Other re_Controller() code
 ```
 
-For further context, this code calls both the Update Function and then a Setup Function; the Setup Function is called as a menu page refresh. 
+Now, provided below is an example of an Update Function for the first channel item Button_Item:
 
-
-
-
-
+```C++
+void update_Channel_Item_1(void) { 
+  if (activeChannel)                     // Ensure the user has selected a Pump_Channel
+    set_Channel_Dosage(activeChannel);   // Call the specific function. (This function can be changed to reflect future needs.)
+}
+```
