@@ -90,8 +90,49 @@ enum RES_STATUS {
 The resolution codes of a channel act as a place where page setup and page print functions can send return codes and receive error codes. Return codes are primarily implemented to pass information to error messages and error codes are primary implemented to print correct error codes. Dominant errors include user-inputted parameters attempting to update beyond set boundaries. Because the resolution codes fall in a two-element array (resolutionCodes[2]), the first element is dedicated to the error code and the second element is dedicated to the return code or other passed information.
 
 ### ButtonItem / Button_Item
+The Button_Item struct acts acts a continer class for the ButtonWidget struct, detailed in the section below. The information stored consists of a button label, a ButtonWidget struct, and two function pointers. Each Button_Item represents the visual and functional aspects of the LCD's UI buttons; the ButtonWidget struct stores the visual information of each button while the two function pointers act as the functions to call when the button is interacted with. 
+
+Specficially, the first function pointer is used as the setup function to run when its respective ButtonWidget is pressed; that is, these primary function pointers are directly connected to the Button_Item, as they are called when the respective ButtonWidget is pressed. 
+
+The second function pointer represents a backend action or update function, instead of printing a menu page; this is because the second function pointer runs on a rotary encoder turn, not when the ButtonWidget is pressed; that is, they are called from rotary encoder movements in that Button_Item's respective menu or menu page, such as updating the value on the dosage menu page. It is important to note that not all buttons require this second function pointer, since many Button_Items do not need to associate with rotary encoder movements.
+
+The declaration of the struct can be found as so:
+
+```C++
+// Define the structure for a Channel Item
+typedef struct ButtonItem {
+
+  char *label;
+  ButtonWidget btn = ButtonWidget(&tft);
+  void (*setup_func)() = NULL;
+  void (*update_func)() = NULL;
+
+  // Constructors for buttons with only setup functions.
+  ButtonItem(char *lbl, void (*setup)()) {
+    label = lbl;
+    setup_func = setup;
+  }
+
+  // Constructors for buttons with both setup and update functions.
+  ButtonItem(char *lbl, void (*setup)(), void (*update)()) {
+    label = lbl;
+    setup_func = setup;
+    update_func = update;
+  }
+
+}Button_Item;
+```
+#### 
+Getting into specifics, there are four channel buttons who live in the main menu, seven channel item buttons who live in a Pump_Channel sub-menu, and six action buttons who live in a channel item menu page. Because the channel and action buttons do not pertain to menu pages that interact with the rotary encoder, they do not have a second function pointer associated with them. Opposingly, because the channel item buttons relate to pages that utilize the rotary encoder, such as the dosage menu page, they are given a second function pointer.
+
+All of these Button_Items are stored in respective arrays and matrices that aid in menu customization. For example, pointers to every channel Button_Item are stored in the `main_b[]` array in the order of their visual placement. 
+
+Similarly, pointers to every channel item Button_Item are stored in the `channel_b[]` array in the order of their visual placement. Note that there isn't an array for every Pump_Channel, this is because the software keeps track of the active channel and channel item, and thus the array can be re-used for all four Pump_Channel sub-menus.
+
+Finally, pointers to every action Button_Item are stored in the `item_b[][3]` matrix. A matrix was purposefully used to allow for each channel item menu page to be quickly customizable. There is a caveat, however, which is that the column length must be the same, in this case three; this may not be useful if one menu page needs five buttons, but another only needs two. To combat this, you could add a NULL Buttom_Item that the software can disregard when printing the visual menu page. Doing so would allow you to extend the column length to any needed size while filling in unneeded matrix cells with this NULL Button_Item.
 
 #### ButtonWidget
+The ButtonWidget struct is taken directly from the [TFT_eWidget](https://github.com/Bodmer/TFT_eWidget) GitHub repository. Additional information may be found at its "parent" library, [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI). These two libraries aid in the creation and nagivation of the LCD's UI.
 
 #### Setup Functions
 
