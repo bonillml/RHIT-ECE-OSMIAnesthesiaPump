@@ -131,6 +131,22 @@ Similarly, pointers to every channel item Button_Item are stored in the `channel
 
 Finally, pointers to every action Button_Item are stored in the `item_b[][3]` matrix. A matrix was purposefully used to allow for each channel item menu page to be quickly customizable. There is a caveat, however, which is that the column length must be the same, in this case three; this may not be useful if one menu page needs five buttons, but another only needs two. To combat this, you could add a NULL Buttom_Item that the software can disregard when printing the visual menu page. Doing so would allow you to extend the column length to any needed size while filling in unneeded matrix cells with this NULL Button_Item.
 
+The declarations of the arrays and matrices are as follows:
+
+```C++
+// Create arrays of ButtonItem Structures
+Button_Item *main_b[] = {&channel1BI, &channel2BI, &channel3BI, &channel4BI};
+Button_Item *channel_b[] = {&dosageBI, &infusionRateBI, &syringeStartBI, &syringeEndBI, &calibrateBI, &startStopBI, &mainMenuBI};
+Button_Item *item_b[][3] = {
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Dosage Page
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Infusion Rate Page
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Syringe Start Page
+                           {&resolutionBI, &clearItemBI, &exitItemBI},          // Syringe End Page
+                           {&resolutionBI, &tareLoadCellBI, &exitItemBI},       // Calibrate Page
+                           {&startStopMotorBI, &calculateStepsBI, &exitItemBI}, // Start/Stop Page
+                          };
+```
+
 #### ButtonWidget
 The ButtonWidget struct is taken directly from the [TFT_eWidget](https://github.com/Bodmer/TFT_eWidget) GitHub repository. Additional information may be found at its "parent" library, [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI). These two libraries aid in the creation and nagivation of the LCD's UI.
 
