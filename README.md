@@ -145,14 +145,72 @@ Button_Item *item_b[][3] = {
                            {&resolutionBI, &tareLoadCellBI, &exitItemBI},       // Calibrate Page
                            {&startStopMotorBI, &calculateStepsBI, &exitItemBI}, // Start/Stop Page
                           };
+
+// Calculate the size of each array.
+uint8_t main_b_size = sizeof(main_b) / sizeof(main_b[0]);
+uint8_t channel_b_size = sizeof(channel_b) / sizeof(channel_b[0]);
+uint8_t item_b_size = sizeof(item_b) / sizeof(item_b[0]);
+uint8_t item_bl_size = 3; // Temporarily hard-coded
 ```
 
 #### ButtonWidget
 The ButtonWidget struct is taken directly from the [TFT_eWidget](https://github.com/Bodmer/TFT_eWidget) GitHub repository. Additional information may be found at its "parent" library, [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI). These two libraries aid in the creation and nagivation of the LCD's UI.
 
 #### Setup Functions
+In the context of this software, Setup Functions are "middle men" functions that are attached to the Button_Items. They are ran when the ButtonWidget in their respective Button_Item is pressed. Inside their body, they typically set the `activeChannel` and `activeChannelItem` global flags then proceed to call specific functions. All Setup Functions must have the signature `void setup_Function(void)`, as this is the only signature that works with ButtonWidgets. The following is an example of the Setup Function attached to the "Channel 1" channel button:
+
+```C++
+void setup_Channel_1(void) {
+  activeChannelItem = 0;                                // When in a menu, there is no active channel item. i.e., not on a channel item menu page.
+  activeChannel = 1;                                    // Change the current active channel to be channel one.
+  if (activeChannel) {                                  // Ensure we are in a channel. May be further expanded to be (activeChannel == 1)
+    print_Menu_Header(activeChannel, 0, 0, "   ");      // Print the title of the channel one sub-menu.
+    print_Menu_Window(activeChannel);                   // Print the contents of the channel one sub-menu.
+  }
+}
+```
+
+Another example that differs slightly is of the Setup Function attached to a channel item button. For example, the "Dosage" channel item button:
+
+```C++
+void setup_Channel_Item_1(void) {                                            
+  if (activeChannel && (!activeChannelItem || activeChannelItem == 1)) {    // Ensure this menu page can only printed when coming from a channel sub-menu or a menu page refresh.
+    activeChannelItem = 1;                                                  // Ensure the active channel item is channel item one -- dosage, in this case.
+    print_Menu_Header(activeChannel, 1, 1, "   ");                          // Print the title of the dosage menu page for the active channel.
+    print_Channel_Dosage(activeChannel);                                    // Print the conents of the dosage menu page. (This function can be changed to reflect future needs.)
+  } 
+}
+```
+
+One final example is that of the action buttons, such as the "Resolution" action button:
+
+```C++
+void cycle_Channel_Item_Resolution(void) {
+  if (activeChannel && activeChannelItem)                // Ensure we are in a menu page. May be further expanded to keep tighter restriction.
+    cycle_Channel_Resolution(activeChannel);             // Call the specific function. (This function can be changed to reflect future needs.)
+}
+```
 
 #### Update Functions
+On the other hand, Update Functions are rotary encoder-enforced functions that relate to a Button_Item's respective menu page. To recount, Update Functions are not called when their Button_Item's ButtonWidget is pressed. They are called upon in the `re_Controller()` function when the user is in a valid channel item menu page and the software detects a large enough turn of the rotary encoder. Here is the following code within the `re_Controller()` function that calls the Update Functions:
+
+```C++
+// ... Other re_Controller() code
+
+// Determine if the Rotary Encoder has moved enough to warrant an action.
+if (!(curCountRE % RE_SCROLL_COUNT)) {
+
+    if (activeChannelItem) {
+      Serial.println("Performing Action Item " + String(activeChannelItem));
+      (*channel_b[activeChannelItem - 1]).update_func();
+      if (activeChannelItem != 5)
+        (*channel_b[activeChannelItem - 1]).setup_func();
+    }
+}
+// ... Other re_Controller() code
+```
+
+For further context, this code calls both the Update Function and then a Setup Function; the Setup Function is called as a menu page refresh. 
 
 
 
